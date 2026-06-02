@@ -1,0 +1,62 @@
+package main
+
+import (
+	"context"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/McDouglas-Go/messenger/internal/config"
+	"github.com/McDouglas-Go/messenger/internal/database"
+)
+
+func main() {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	pool, err := database.NewPool(ctx, cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("failed to connect to database: %v", err)
+	}
+
+	defer pool.Close()
+
+	if err := database.RunMigrations(cfg.DatabaseURL); err != nil {
+		log.Fatalf("failed to run migrations: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+	srv := &http.Server{
+		Addr:    ":" + cfg.ServerPort,
+		Handler: mux,
+	}
+
+	go func() {
+		quit := make(chan os.Signal, 1)
+		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+		<-quit
+		log.Println("Shutting down server...")
+		cancel()
+		ctxShutdown, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelShutdown()
+		srv.Shutdown(ctxShutdown)
+	}()
+
+	log.Printf("Server listening on port %s", cfg.ServerPort)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("Server failed: %v", err)
+	}
+	log.Println("Server stopped")
+}
