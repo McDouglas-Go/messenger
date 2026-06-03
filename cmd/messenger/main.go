@@ -11,6 +11,9 @@ import (
 
 	"github.com/McDouglas-Go/messenger/internal/config"
 	"github.com/McDouglas-Go/messenger/internal/database"
+	"github.com/McDouglas-Go/messenger/internal/handlers"
+	"github.com/McDouglas-Go/messenger/internal/repository"
+	"github.com/McDouglas-Go/messenger/internal/service"
 )
 
 func main() {
@@ -33,14 +36,24 @@ func main() {
 		log.Fatalf("failed to run migrations: %v", err)
 	}
 
+	userRepo := repository.NewUserRepository(pool)
+	authService := service.NewAuthService(userRepo)
+	authHandler := handlers.NewAuthHandler(authService, log.Default())
+
 	mux := http.NewServeMux()
+
+	mux.HandleFunc("/api/register", authHandler.Register)
+
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
 	srv := &http.Server{
-		Addr:    ":" + cfg.ServerPort,
-		Handler: mux,
+		Addr:         ":" + cfg.ServerPort,
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  30 * time.Second,
 	}
 
 	go func() {

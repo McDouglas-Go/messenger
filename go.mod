@@ -6,6 +6,7 @@ require (
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/joho/godotenv v1.5.1
+	golang.org/x/crypto v0.45.0
 )
 
 require (

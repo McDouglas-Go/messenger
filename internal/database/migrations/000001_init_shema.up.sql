@@ -4,6 +4,7 @@ CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     username VARCHAR(30) UNIQUE NOT NULL,     
     email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
     display_name VARCHAR(100) NOT NULL,        
     about TEXT DEFAULT '',                    
     profile_photo_url TEXT DEFAULT '',         
