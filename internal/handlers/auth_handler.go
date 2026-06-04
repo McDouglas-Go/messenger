@@ -73,3 +73,35 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		h.log.Printf("Failed to encode response for user %s: %v", user.ID, err)
 	}
 }
+
+func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input service.LoginInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	token, err := h.authService.Login(r.Context(), input)
+	if err != nil {
+		status := http.StatusInternalServerError
+		msg := "Internal server error"
+		if err.Error() == "invalid email or password" {
+			status = http.StatusUnauthorized
+			msg = err.Error()
+		}
+		http.Error(w, msg, status)
+		return
+	}
+
+	resp := map[string]string{"token": token}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		h.log.Printf("Failed to encode login respomse: %v", err)
+	}
+}

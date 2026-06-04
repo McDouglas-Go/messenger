@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/McDouglas-Go/messenger/internal/auth"
 	"github.com/McDouglas-Go/messenger/internal/model"
 	"github.com/McDouglas-Go/messenger/internal/repository"
 	"golang.org/x/crypto/bcrypt"
@@ -20,6 +21,7 @@ var (
 
 type AuthSerice interface {
 	Register(ctx context.Context, input RegisterInput) (*model.User, error)
+	Login(ctx context.Context, input LoginInput) (string, error)
 }
 
 type RegisterInput struct {
@@ -31,11 +33,17 @@ type RegisterInput struct {
 }
 
 type authService struct {
-	userRepo repository.UserRepository
+	userRepo   repository.UserRepository
+	jwtManager *auth.JWTManager
 }
 
-func NewAuthService(userRepo repository.UserRepository) AuthSerice {
-	return &authService{userRepo: userRepo}
+type LoginInput struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+func NewAuthService(userRepo repository.UserRepository, jwtManager *auth.JWTManager) AuthSerice {
+	return &authService{userRepo: userRepo, jwtManager: jwtManager}
 }
 
 func (s *authService) Register(ctx context.Context, input RegisterInput) (*model.User, error) {
@@ -119,4 +127,25 @@ func hashPassword(password string) (string, error) {
 		return "", nil
 	}
 	return string(bytes), nil
+}
+
+func (s *authService) Login(ctx context.Context, input LoginInput) (string, error) {
+	user, err := s.userRepo.GetByEmail(ctx, input.Email)
+	if err != nil {
+		return "", fmt.Errorf("get user by email: %w", err)
+	}
+	if user == nil {
+		return "", fmt.Errorf("invalid email or password")
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.Password)); err != nil {
+		return "", fmt.Errorf("invalid email or password")
+	}
+
+	token, err := s.jwtManager.Generate(user.ID, user.Username)
+	if err != nil {
+		return "", fmt.Errorf("generate token: %w", err)
+	}
+
+	return token, nil
 }

@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/McDouglas-Go/messenger/internal/auth"
 	"github.com/McDouglas-Go/messenger/internal/config"
 	"github.com/McDouglas-Go/messenger/internal/database"
 	"github.com/McDouglas-Go/messenger/internal/handlers"
@@ -35,15 +36,15 @@ func main() {
 	if err := database.RunMigrations(cfg.DatabaseURL); err != nil {
 		log.Fatalf("failed to run migrations: %v", err)
 	}
-
+	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTExpiration)
 	userRepo := repository.NewUserRepository(pool)
-	authService := service.NewAuthService(userRepo)
+	authService := service.NewAuthService(userRepo, jwtManager)
 	authHandler := handlers.NewAuthHandler(authService, log.Default())
 
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/register", authHandler.Register)
-
+	mux.HandleFunc("/api/login", authHandler.Login)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
