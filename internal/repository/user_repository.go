@@ -14,6 +14,7 @@ type UserRepository interface {
 	GetByEmail(ctx context.Context, email string) (*model.User, error)
 	GetByUsername(ctx context.Context, username string) (*model.User, error)
 	GetByID(ctx context.Context, id string) (*model.User, error)
+	SearchByUsername(ctx context.Context, query string, limit int) ([]*model.User, error)
 	Update(ctx context.Context, user *model.User) error
 	Delete(ctx context.Context, id string) error
 }
@@ -135,6 +136,46 @@ func (r *pgUserRepository) GetByID(ctx context.Context, id string) (*model.User,
 		return nil, fmt.Errorf("query user by id: %w", err)
 	}
 	return user, nil
+}
+
+func (r *pgUserRepository) SearchByUsername(ctx context.Context, query string, limit int) ([]*model.User, error) {
+	sql := `
+        SELECT id, username, email, password_hash, display_name, about, profile_photo_url, public_key, created_at, updated_at
+        FROM users
+        WHERE username ILIKE $1
+        ORDER BY username
+        LIMIT $2`
+	rows, err := r.pool.Query(ctx, sql, "%"+query+"%", limit)
+	if err != nil {
+		return nil, fmt.Errorf("search user: %w", err)
+	}
+	defer rows.Close()
+
+	var users []*model.User
+	for rows.Next() {
+		user := &model.User{}
+		err := rows.Scan(
+			&user.ID,
+			&user.Username,
+			&user.Email,
+			&user.PasswordHash,
+			&user.DisplayName,
+			&user.About,
+			&user.ProfilePhotoURL,
+			&user.PublicKey,
+			&user.CreatedAt,
+			&user.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan user row: %w", err)
+		}
+
+		users = append(users, user)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate users: %w", err)
+	}
+	return users, nil
 }
 
 func (r *pgUserRepository) Update(ctx context.Context, user *model.User) error {
