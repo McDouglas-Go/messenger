@@ -38,9 +38,14 @@ func main() {
 		log.Fatalf("failed to run migrations: %v", err)
 	}
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTExpiration)
+
 	userRepo := repository.NewUserRepository(pool)
 	authService := service.NewAuthService(userRepo, jwtManager)
 	authHandler := handlers.NewAuthHandler(authService, userRepo, log.Default())
+
+	chatRepo := repository.NewChatRepository(pool)
+	chatServise := service.NewChatService(chatRepo, userRepo)
+	chatHandler := handlers.NewChatHandler(chatServise, log.Default())
 
 	mux := http.NewServeMux()
 
@@ -50,10 +55,9 @@ func main() {
 	authMw := middleware.AuthMiddleware(jwtManager)
 	mux.Handle("/api/me", authMw(http.HandlerFunc(authHandler.Me)))
 	mux.Handle("/api/users", authMw(http.HandlerFunc(authHandler.SearchUsers)))
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-	})
+	mux.Handle("/api/chats/private", authMw(http.HandlerFunc(chatHandler.CreatePrivate)))
+	mux.Handle("/api/chats/group", authMw(http.HandlerFunc(chatHandler.CreateGroup)))
+	mux.Handle("/api/chats", authMw(http.HandlerFunc(chatHandler.GetUserChats)))
 	srv := &http.Server{
 		Addr:         ":" + cfg.ServerPort,
 		Handler:      mux,

@@ -13,6 +13,8 @@ type ChatRepository interface {
 	Create(ctx context.Context, chat *model.Chat, creatorID string) error
 	GetByID(ctx context.Context, id string) (*model.Chat, error)
 	GetUserchats(ctx context.Context, userID string) ([]*model.Chat, error)
+	AddMember(ctx context.Context, chatID, userID string, role model.MemberRole) error
+	GetChatMembers(ctx context.Context, chatID string) ([]*model.ChatMember, error)
 }
 
 type pgChatRepository struct {
@@ -122,4 +124,42 @@ func (r *pgChatRepository) GetUserchats(ctx context.Context, userID string) ([]*
 	}
 
 	return chats, nil
+}
+
+func (r *pgChatRepository) AddMember(ctx context.Context, chatID, userID string, role model.MemberRole) error {
+	query := `INSERT INTO chat_members (chat_id, user_id, role) VALUES ($1, $2, $3)`
+	_, err := r.pool.Exec(ctx, query, chatID, userID, role)
+	if err != nil {
+		return fmt.Errorf("insert chat member: %w", err)
+	}
+	return nil
+}
+
+func (r *pgChatRepository) GetChatMembers(ctx context.Context, chatID string) ([]*model.ChatMember, error) {
+	query := `SELECT chat_id, user_id, role, joined_at FROM chat_members WHERE chat_id = $1 ORDER BY joined_at`
+	rows, err := r.pool.Query(ctx, query, chatID)
+	if err != nil {
+		return nil, fmt.Errorf("query chat member: %w", err)
+	}
+	defer rows.Close()
+
+	var members []*model.ChatMember
+	for rows.Next() {
+		member := &model.ChatMember{}
+		err := rows.Scan(
+			&member.ChatID,
+			&member.UserID,
+			&member.Role,
+			&member.JoinedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan members: %w", err)
+		}
+		members = append(members, member)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate members: %w", err)
+	}
+
+	return members, nil
 }
