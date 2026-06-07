@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/McDouglas-Go/messenger/internal/middleware"
@@ -32,19 +32,14 @@ func chatToResponse(chat *model.Chat) chatResponse {
 
 type ChatHandler struct {
 	chatService service.ChatService
-	log         *log.Logger
+	log         *slog.Logger
 }
 
-func NewChatHandler(chatService service.ChatService, logger *log.Logger) *ChatHandler {
+func NewChatHandler(chatService service.ChatService, logger *slog.Logger) *ChatHandler {
 	return &ChatHandler{chatService: chatService, log: logger}
 }
 
 func (h *ChatHandler) CreatePrivate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Methos mot allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	claims, ok := middleware.GetClaimsFromContext(r.Context())
 	if !ok {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -70,7 +65,7 @@ func (h *ChatHandler) CreatePrivate(w http.ResponseWriter, r *http.Request) {
 
 	chat, err := h.chatService.CreatePrivate(r.Context(), currentUserID, req.UserID)
 	if err != nil {
-		h.log.Printf("CreatePrivate error: %v", err)
+		h.log.Error("CreatePrivate error", "error", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -79,16 +74,11 @@ func (h *ChatHandler) CreatePrivate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		h.log.Printf("Failed to encode chat response: %v", err)
+		h.log.Error("Failed to encode chat response", "error", err)
 	}
 }
 
 func (h *ChatHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	claims, ok := middleware.GetClaimsFromContext(r.Context())
 	if !ok {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -119,7 +109,7 @@ func (h *ChatHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 
 	chat, err := h.chatService.CreateGroup(r.Context(), req.Name, currentUserID, req.MemberIDs)
 	if err != nil {
-		h.log.Printf("CreateGroup error: %v", err)
+		h.log.Error("CreateGroup error", "error", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -128,16 +118,11 @@ func (h *ChatHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		h.log.Printf("Failed to encode chat response: %v", err)
+		h.log.Error("Failed to encode chat response", "error", err)
 	}
 }
 
 func (h *ChatHandler) GetUserChats(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	claims, ok := middleware.GetClaimsFromContext(r.Context())
 	if !ok {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -146,7 +131,7 @@ func (h *ChatHandler) GetUserChats(w http.ResponseWriter, r *http.Request) {
 
 	chats, err := h.chatService.GetUserChats(r.Context(), claims.UserID)
 	if err != nil {
-		h.log.Printf("GetUserChats error: %v", err)
+		h.log.Error("GetUserChats error", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -159,6 +144,6 @@ func (h *ChatHandler) GetUserChats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(respList); err != nil {
-		h.log.Printf("Failed to encode chat list: %v", err)
+		h.log.Error("Failed to encode chat list", "error", err)
 	}
 }

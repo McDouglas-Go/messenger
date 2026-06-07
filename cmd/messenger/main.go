@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,51 +16,64 @@ import (
 	"github.com/McDouglas-Go/messenger/internal/middleware"
 	"github.com/McDouglas-Go/messenger/internal/repository"
 	"github.com/McDouglas-Go/messenger/internal/service"
+	"github.com/gorilla/mux"
 )
 
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		slog.Error("Failed to load config", "error", err)
+		os.Exit(1)
 	}
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	pool, err := database.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("failed to connect to database: %v", err)
+		logger.Error("Failed to connect to database", "error", err)
+		os.Exit(1)
 	}
 
 	defer pool.Close()
 
 	if err := database.RunMigrations(cfg.DatabaseURL); err != nil {
-		log.Fatalf("failed to run migrations: %v", err)
+		logger.Error("Failed to run migrations", "error", err)
+		os.Exit(1)
 	}
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTExpiration)
 
 	userRepo := repository.NewUserRepository(pool)
-	authService := service.NewAuthService(userRepo, jwtManager)
-	authHandler := handlers.NewAuthHandler(authService, userRepo, log.Default())
-
 	chatRepo := repository.NewChatRepository(pool)
+	msgRepo := repository.NewMessageRepository(pool)
+
+	authService := service.NewAuthService(userRepo, jwtManager)
 	chatServise := service.NewChatService(chatRepo, userRepo)
-	chatHandler := handlers.NewChatHandler(chatServise, log.Default())
+	messageService := service.NewMessageService(msgRepo, chatRepo)
 
-	mux := http.NewServeMux()
+	authHandler := handlers.NewAuthHandler(authService, userRepo, logger)
+	chatHandler := handlers.NewChatHandler(chatServise, logger)
+	messageHandler := handlers.Newmessagehandler(messageService, logger)
 
-	mux.HandleFunc("/api/register", authHandler.Register)
-	mux.HandleFunc("/api/login", authHandler.Login)
+	r := mux.NewRouter()
 
-	authMw := middleware.AuthMiddleware(jwtManager)
-	mux.Handle("/api/me", authMw(http.HandlerFunc(authHandler.Me)))
-	mux.Handle("/api/users", authMw(http.HandlerFunc(authHandler.SearchUsers)))
-	mux.Handle("/api/chats/private", authMw(http.HandlerFunc(chatHandler.CreatePrivate)))
-	mux.Handle("/api/chats/group", authMw(http.HandlerFunc(chatHandler.CreateGroup)))
-	mux.Handle("/api/chats", authMw(http.HandlerFunc(chatHandler.GetUserChats)))
+	r.HandleFunc("/api/register", authHandler.Register).Methods("POST")
+	r.HandleFunc("/api/login", authHandler.Login).Methods("POST")
+
+	api := r.PathPrefix("/api").Subrouter()
+	api.Use(middleware.AuthMiddleware(jwtManager))
+	api.HandleFunc("/me", authHandler.Me).Methods("GET")
+	api.HandleFunc("/users", authHandler.SearchUsers).Methods("GET")
+	api.HandleFunc("/chats/private", chatHandler.CreatePrivate).Methods("POST")
+	api.HandleFunc("/chats/group", chatHandler.CreateGroup).Methods("POST")
+	api.HandleFunc("/chats", chatHandler.GetUserChats).Methods("GET")
+	api.HandleFunc("/chats/{chat_id}/messages", messageHandler.Send).Methods("POST")
+	api.HandleFunc("/chats/{chat_id}/messages", messageHandler.GetChatHistory).Methods("GET")
 	srv := &http.Server{
 		Addr:         ":" + cfg.ServerPort,
-		Handler:      mux,
+		Handler:      r,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  30 * time.Second,
@@ -70,16 +83,17 @@ func main() {
 		quit := make(chan os.Signal, 1)
 		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 		<-quit
-		log.Println("Shutting down server...")
+		logger.Info("Shutting down server...")
 		cancel()
 		ctxShutdown, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancelShutdown()
 		srv.Shutdown(ctxShutdown)
 	}()
 
-	log.Printf("Server listening on port %s", cfg.ServerPort)
+	logger.Info("Server listening", "port", cfg.ServerPort)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("Server failed: %v", err)
+		logger.Error("Server failed", "error", err)
+		os.Exit(1)
 	}
-	log.Println("Server stopped")
+	logger.Info("Server stopped")
 }

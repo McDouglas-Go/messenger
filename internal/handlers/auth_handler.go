@@ -3,7 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -37,10 +37,10 @@ type SearchUserResponse struct {
 type AuthHandler struct {
 	authService service.AuthSerice
 	userRepo    repository.UserRepository
-	log         *log.Logger
+	log         *slog.Logger
 }
 
-func NewAuthHandler(authService service.AuthSerice, userRepo repository.UserRepository, logger *log.Logger) *AuthHandler {
+func NewAuthHandler(authService service.AuthSerice, userRepo repository.UserRepository, logger *slog.Logger) *AuthHandler {
 	return &AuthHandler{
 		authService: authService,
 		userRepo:    userRepo,
@@ -49,11 +49,6 @@ func NewAuthHandler(authService service.AuthSerice, userRepo repository.UserRepo
 }
 
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var input service.RegisterInput
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -88,15 +83,11 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		h.log.Printf("Failed to encode response for user %s: %v", user.ID, err)
+		h.log.Error("Failed to encode response for user %s: %v", user.ID, err)
 	}
 }
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var input service.LoginInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
@@ -120,7 +111,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		h.log.Printf("Failed to encode login respomse: %v", err)
+		h.log.Error("Failed to encode login response", "error", err)
 	}
 }
 
@@ -133,7 +124,7 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.userRepo.GetByID(r.Context(), claims.UserID)
 	if err != nil {
-		h.log.Printf("Failed to get user %s: %v", claims.UserID, err)
+		h.log.Error("Failed to get user %s: %v", claims.UserID, err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -156,16 +147,11 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		h.log.Printf("Failed to encode me response: %v", err)
+		h.log.Error("Failed to encode me response", "error", err)
 	}
 }
 
 func (h *AuthHandler) SearchUsers(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	query := r.URL.Query().Get("query")
 	if strings.TrimSpace(query) == "" {
 		http.Error(w, "Query parameter 'query' is required", http.StatusBadRequest)
@@ -200,6 +186,6 @@ func (h *AuthHandler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		h.log.Printf("Failed to encode search response: %v", err)
+		h.log.Error("Failed to encode search response", "error", err)
 	}
 }
