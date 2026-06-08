@@ -15,6 +15,10 @@ type ChatRepository interface {
 	GetUserchats(ctx context.Context, userID string) ([]*model.Chat, error)
 	AddMember(ctx context.Context, chatID, userID string, role model.MemberRole) error
 	GetChatMembers(ctx context.Context, chatID string) ([]*model.ChatMember, error)
+	Update(ctx context.Context, chat *model.Chat) error
+	Delete(ctx context.Context, id string) error
+	RemoveMember(ctx context.Context, chatID, userID string) error
+	GetMember(ctx context.Context, chatID, userID string) (*model.ChatMember, error)
 }
 
 type pgChatRepository struct {
@@ -162,4 +166,66 @@ func (r *pgChatRepository) GetChatMembers(ctx context.Context, chatID string) ([
 	}
 
 	return members, nil
+}
+
+func (r *pgChatRepository) Update(ctx context.Context, chat *model.Chat) error {
+	query := `
+        UPDATE chats
+        SET name = $1,
+            updated_at = now()
+        WHERE id = $2
+        RETURNING updated_at`
+
+	err := r.pool.QueryRow(ctx, query, chat.Name, chat.ID).Scan(&chat.UpdatedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return fmt.Errorf("chat not found")
+		}
+		return fmt.Errorf("update chat: %w", err)
+	}
+
+	return nil
+}
+
+func (r *pgChatRepository) Delete(ctx context.Context, id string) error {
+	result, err := r.pool.Exec(ctx, "DELETE FROM chats WHERE id = $1", id)
+	if err != nil {
+		return fmt.Errorf("delete chat: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("chat not found")
+	}
+
+	return nil
+}
+
+func (r *pgChatRepository) RemoveMember(ctx context.Context, chatID, userID string) error {
+	result, err := r.pool.Exec(ctx, "DELETE FROM chat_members WHERE chat_id = $1 AND user_id = $2", chatID, userID)
+	if err != nil {
+		return fmt.Errorf("remove member: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("member not found")
+	}
+
+	return nil
+}
+
+func (r *pgChatRepository) GetMember(ctx context.Context, chatID, userID string) (*model.ChatMember, error) {
+	query := `SELECT chat_id, user_id, role, joined_at FROM chat_members WHERE chat_id = $1 AND user_id = $2`
+	member := &model.ChatMember{}
+	err := r.pool.QueryRow(ctx, query, chatID, userID).Scan(
+		&member.ChatID,
+		&member.UserID,
+		&member.Role,
+		&member.JoinedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get member: %w", err)
+	}
+
+	return member, nil
 }

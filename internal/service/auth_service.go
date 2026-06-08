@@ -22,6 +22,8 @@ var (
 type AuthSerice interface {
 	Register(ctx context.Context, input RegisterInput) (*model.User, error)
 	Login(ctx context.Context, input LoginInput) (string, error)
+	UpdateProfile(ctx context.Context, userID string, input UpdateProfileInput) (*model.User, error)
+	DeleteProfile(ctx context.Context, userID string) error
 }
 
 type RegisterInput struct {
@@ -32,14 +34,21 @@ type RegisterInput struct {
 	DisplayName     string `json:"display_name"`
 }
 
-type authService struct {
-	userRepo   repository.UserRepository
-	jwtManager *auth.JWTManager
-}
-
 type LoginInput struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+}
+
+type UpdateProfileInput struct {
+	DisplayName     *string `json:"display_name,omitempty"`
+	About           *string `json:"about,omitempty"`
+	ProfilePhotoURL *string `json:"profile_photo_url,omitempty"`
+	PublicKey       *string `json:"public_key,omitempty"`
+}
+
+type authService struct {
+	userRepo   repository.UserRepository
+	jwtManager *auth.JWTManager
 }
 
 func NewAuthService(userRepo repository.UserRepository, jwtManager *auth.JWTManager) AuthSerice {
@@ -148,4 +157,49 @@ func (s *authService) Login(ctx context.Context, input LoginInput) (string, erro
 	}
 
 	return token, nil
+}
+
+func (s *authService) UpdateProfile(ctx context.Context, userID string, input UpdateProfileInput) (*model.User, error) {
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("get user: %w", err)
+	}
+	if user == nil {
+		return nil, errors.New("user nor found")
+	}
+
+	if input.DisplayName != nil {
+		user.DisplayName = *input.DisplayName
+	}
+	if input.About != nil {
+		user.About = *input.About
+	}
+	if input.ProfilePhotoURL != nil {
+		user.ProfilePhotoURL = *input.ProfilePhotoURL
+	}
+	if input.PublicKey != nil {
+		user.PublicKey = input.PublicKey
+	}
+
+	if len(user.DisplayName) == 0 {
+		return nil, fmt.Errorf("%w: display_name must be between 1 and 100 characters", ErrValidation)
+	}
+
+	if err := s.userRepo.Update(ctx, user); err != nil {
+		return nil, fmt.Errorf("update user: %w", err)
+	}
+
+	return user, nil
+}
+
+func (s *authService) DeleteProfile(ctx context.Context, userID string) error {
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("get user: %w", err)
+	}
+	if user == nil {
+		return errors.New("user not found")
+	}
+
+	return s.userRepo.Delete(ctx, userID)
 }

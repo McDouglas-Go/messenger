@@ -179,9 +179,41 @@ func (r *pgUserRepository) SearchByUsername(ctx context.Context, query string, l
 }
 
 func (r *pgUserRepository) Update(ctx context.Context, user *model.User) error {
-	return fmt.Errorf("not ready")
+	query := `
+        UPDATE users
+        SET display_name = $1,
+            about = $2,
+            profile_photo_url = $3,
+            public_key = $4,
+            updated_at = now()
+        WHERE id = $5
+        RETURNING updated_at`
+
+	args := []interface{}{
+		user.DisplayName,
+		user.About,
+		user.ProfilePhotoURL,
+		user.PublicKey,
+		user.ID,
+	}
+	if err := r.pool.QueryRow(ctx, query, args...).Scan(&user.UpdatedAt); err != nil {
+		if err == pgx.ErrNoRows {
+			return fmt.Errorf("user not found")
+		}
+		return fmt.Errorf("update user: %w", err)
+	}
+
+	return nil
 }
 
 func (r *pgUserRepository) Delete(ctx context.Context, id string) error {
-	return fmt.Errorf("not ready")
+	result, err := r.pool.Exec(ctx, "DELETE FROM users WHERE id = $1", id)
+	if err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("user not found")
+	}
+
+	return nil
 }

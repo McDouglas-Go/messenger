@@ -42,6 +42,13 @@ type messageResponse struct {
 	EditedAt         *string `json:"edited_at,omitempty"`
 }
 
+type editMessageRequest struct {
+	EncryptedContent string  `json:"encrypted_content"`
+	Nonce            string  `json:"nonce"`
+	ContentType      string  `json:"content_type"`
+	EncryptionKeyID  *string `json:"encryption_key_id,omitempty"`
+}
+
 func MessageToResponse(msg *model.EncryptedMessage) messageResponse {
 	m := messageResponse{
 		ID:               msg.ID,
@@ -179,4 +186,96 @@ func (h *MessageHandler) GetChatHistory(w http.ResponseWriter, r *http.Request) 
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		slog.Error("failed to encode response", "error", err)
 	}
+}
+
+func (h *MessageHandler) EditMessage(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.GetClaimsFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	chatID := vars["chat_id"]
+	messageID := vars["message_id"]
+	if chatID == "" || messageID == "" {
+		http.Error(w, "chat_id and message_id are required", http.StatusBadRequest)
+		return
+	}
+	var req editMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	encBytes, err := base64.StdEncoding.DecodeString(req.EncryptedContent)
+	if err != nil {
+		http.Error(w, "Invalid base64 for encrypted_content", http.StatusBadRequest)
+		return
+	}
+	nonceBytes, err := base64.StdEncoding.DecodeString(req.Nonce)
+	if err != nil {
+		http.Error(w, "Invalid base64 for nonce", http.StatusBadRequest)
+		return
+	}
+
+	updatedMsg, err := h.messageService.EditMessage(
+		r.Context(),
+		claims.UserID,
+		chatID,
+		messageID,
+		encBytes,
+		nonceBytes,
+		model.ContentType(req.ContentType),
+		req.EncryptionKeyID,
+	)
+	if err != nil {
+		h.log.Error("EditMessage failed", "error", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	resp := messageResponse{
+		ID:               updatedMsg.ID,
+		ChatID:           updatedMsg.ChatID,
+		SenderID:         updatedMsg.SenderID,
+		EncryptedContent: base64.StdEncoding.EncodeToString(updatedMsg.EncryptedContent),
+		Nonce:            base64.StdEncoding.EncodeToString(updatedMsg.Nonce),
+		EncryptionKeyID:  updatedMsg.EncryptionKeyID,
+		ContentType:      string(updatedMsg.ContentType),
+		SentAt:           updatedMsg.SentAt.Format(time.RFC3339),
+	}
+	if updatedMsg.EditedAt != nil {
+		t := updatedMsg.EditedAt.Format(time.RFC3339)
+		resp.EditedAt = &t
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *MessageHandler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.GetClaimsFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	chatID := vars["chat_id"]
+	messageID := vars["message_id"]
+	if chatID == "" || messageID == "" {
+		http.Error(w, "chat_id and message_id are required", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.messageService.DeleteMessage(r.Context(), claims.UserID, chatID, messageID); err != nil {
+		h.log.Error("DeleteMessage failed", "error", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

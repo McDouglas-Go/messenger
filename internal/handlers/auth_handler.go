@@ -34,6 +34,13 @@ type SearchUserResponse struct {
 	UpdatedAt       string `json:"updated_at"`
 }
 
+type updateProfileRequest struct {
+	DisplayName     *string `json:"display_name,omitempty"`
+	About           *string `json:"about,omitempty"`
+	ProfilePhotoURL *string `json:"profile_photo_url,omitempty"`
+	PublicKey       *string `json:"public_key,omitempty"`
+}
+
 type AuthHandler struct {
 	authService service.AuthSerice
 	userRepo    repository.UserRepository
@@ -188,4 +195,68 @@ func (h *AuthHandler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		h.log.Error("Failed to encode search response", "error", err)
 	}
+}
+
+func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.GetClaimsFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req updateProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	input := service.UpdateProfileInput{
+		DisplayName:     req.DisplayName,
+		About:           req.About,
+		ProfilePhotoURL: req.ProfilePhotoURL,
+		PublicKey:       req.PublicKey,
+	}
+
+	user, err := h.authService.UpdateProfile(r.Context(), claims.UserID, input)
+	if err != nil {
+		if errors.Is(err, service.ErrValidation) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		} else {
+			h.log.Error("UpdateProfile failed", "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	resp := userResponse{
+		ID:              user.ID,
+		Username:        user.Username,
+		Email:           user.Email,
+		DisplayName:     user.DisplayName,
+		About:           user.About,
+		ProfilePhotoURL: user.ProfilePhotoURL,
+		CreatedAt:       user.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:       user.UpdatedAt.Format(time.RFC3339),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *AuthHandler) DeleteProfile(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.GetClaimsFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if err := h.authService.DeleteProfile(r.Context(), claims.UserID); err != nil {
+		h.log.Error("DeleteAccount failed", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

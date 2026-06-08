@@ -5,12 +5,16 @@ import (
 	"fmt"
 
 	"github.com/McDouglas-Go/messenger/internal/model"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type MessageRepository interface {
 	Create(ctx context.Context, msg *model.EncryptedMessage) error
 	GetChatMessages(ctx context.Context, chatID string, limit, offset int) ([]*model.EncryptedMessage, error)
+	GetByID(ctx context.Context, id string) (*model.EncryptedMessage, error)
+	Update(ctx context.Context, msg *model.EncryptedMessage) error
+	Delete(ctx context.Context, id string) error
 }
 
 type pgMessageRepository struct {
@@ -91,4 +95,72 @@ func (r *pgMessageRepository) GetChatMessages(ctx context.Context, chatID string
 	}
 
 	return messages, nil
+}
+
+func (r *pgMessageRepository) GetByID(ctx context.Context, id string) (*model.EncryptedMessage, error) {
+	query := `
+        SELECT id, chat_id, sender_id, encrypted_content, nonce, encryption_key_id, content_type, sent_at, edited_at
+        FROM messages
+        WHERE id = $1`
+
+	msg := &model.EncryptedMessage{}
+	err := r.pool.QueryRow(ctx, query, id).Scan(
+		&msg.ID,
+		&msg.ChatID,
+		&msg.SenderID,
+		&msg.EncryptedContent,
+		&msg.Nonce,
+		&msg.EncryptionKeyID,
+		&msg.ContentType,
+		&msg.SentAt,
+		&msg.EditedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get message by id: %w", err)
+	}
+
+	return msg, nil
+}
+
+func (r *pgMessageRepository) Update(ctx context.Context, msg *model.EncryptedMessage) error {
+	query := `
+        UPDATE messages
+        SET encrypted_content = $1,
+            nonce = $2,
+            content_type = $3,
+            encryption_key_id = $4,
+            edited_at = now()
+        WHERE id = $5
+        RETURNING edited_at`
+
+	err := r.pool.QueryRow(ctx, query,
+		msg.EncryptedContent,
+		msg.Nonce,
+		msg.ContentType,
+		msg.EncryptionKeyID,
+		msg.ID,
+	).Scan(&msg.EditedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return fmt.Errorf("message not found")
+		}
+		return fmt.Errorf("update message: %w", err)
+	}
+
+	return nil
+}
+
+func (r *pgMessageRepository) Delete(ctx context.Context, id string) error {
+	result, err := r.pool.Exec(ctx, "DELETE FROM messages WHERE id = $1", id)
+	if err != nil {
+		return fmt.Errorf("delete message: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("message not found")
+	}
+
+	return nil
 }

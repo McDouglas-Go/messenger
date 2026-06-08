@@ -8,6 +8,7 @@ import (
 	"github.com/McDouglas-Go/messenger/internal/middleware"
 	"github.com/McDouglas-Go/messenger/internal/model"
 	"github.com/McDouglas-Go/messenger/internal/service"
+	"github.com/gorilla/mux"
 )
 
 type chatResponse struct {
@@ -28,6 +29,18 @@ func chatToResponse(chat *model.Chat) chatResponse {
 		CreatedAt: chat.CreatedAt.Format("2006-01-02T15:04:05Z"),
 		UpdatedAt: chat.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 	}
+}
+
+type updateChatRequest struct {
+	Name *string `json:"name,omitempty"`
+}
+
+type addMembersRequest struct {
+	UserIDs []string `json:"user_ids"`
+}
+
+type removeMemberRequest struct {
+	UserID string `json:"user_id"`
 }
 
 type ChatHandler struct {
@@ -146,4 +159,92 @@ func (h *ChatHandler) GetUserChats(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(respList); err != nil {
 		h.log.Error("Failed to encode chat list", "error", err)
 	}
+}
+
+func (h *ChatHandler) UpdateChat(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.GetClaimsFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	chatID := mux.Vars(r)["chat_id"]
+	var req updateChatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	chat, err := h.chatService.UpdateChat(r.Context(), claims.UserID, chatID, req.Name)
+	if err != nil {
+		h.log.Error("UpdateChat failed", "error", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	resp := chatToResponse(chat)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *ChatHandler) AddMembers(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.GetClaimsFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	chatID := mux.Vars(r)["chat_id"]
+	var req addMembersRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(req.UserIDs) == 0 {
+		http.Error(w, "user_ids is required", http.StatusBadRequest)
+		return
+	}
+	if err := h.chatService.AddMembers(r.Context(), claims.UserID, chatID, req.UserIDs); err != nil {
+		h.log.Error("AddMembers failed", "error", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *ChatHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.GetClaimsFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	chatID := mux.Vars(r)["chat_id"]
+	var req removeMemberRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.UserID == "" {
+		http.Error(w, "user_id is required", http.StatusBadRequest)
+		return
+	}
+	if err := h.chatService.RemoveMember(r.Context(), claims.UserID, chatID, req.UserID); err != nil {
+		h.log.Error("RemoveMember failed", "error", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *ChatHandler) DeleteChat(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.GetClaimsFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	chatID := mux.Vars(r)["chat_id"]
+	if err := h.chatService.DeleteChat(r.Context(), claims.UserID, chatID); err != nil {
+		h.log.Error("DeleteChat failed", "error", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

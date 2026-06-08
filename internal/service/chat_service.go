@@ -14,6 +14,10 @@ type ChatService interface {
 	CreatePrivate(ctx context.Context, userID1, userID2 string) (*model.Chat, error)
 	CreateGroup(ctx context.Context, name, creatorID string, memberIDs []string) (*model.Chat, error)
 	GetUserChats(ctx context.Context, userID string) ([]*model.Chat, error)
+	UpdateChat(ctx context.Context, userID, chatID string, name *string) (*model.Chat, error)
+	AddMembers(ctx context.Context, userID, chatID string, memberIDs []string) error
+	RemoveMember(ctx context.Context, userID, chatID, targetUserID string) error
+	DeleteChat(ctx context.Context, userID, chatID string) error
 }
 
 type chatService struct {
@@ -133,4 +137,128 @@ func (s *chatService) findExistingPrivateChat(ctx context.Context, userID1, user
 		}
 	}
 	return nil, nil
+}
+
+func (s *chatService) UpdateChat(ctx context.Context, userID, chatID string, name *string) (*model.Chat, error) {
+	chat, err := s.chatRepo.GetByID(ctx, chatID)
+	if err != nil {
+		return nil, fmt.Errorf("get chat: %w", err)
+	}
+	if chat == nil {
+		return nil, fmt.Errorf("chat not found")
+	}
+	if chat.Type != model.ChatTypeGroup {
+		return nil, errors.New("cannot update name of a private chat")
+	}
+
+	member, err := s.chatRepo.GetMember(ctx, chatID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("get member: %w", err)
+	}
+	if member == nil || (member.Role != model.RoleOwner && member.Role != model.RoleAdmin) {
+		return nil, errors.New("only owner or admin can update chat")
+	}
+	if name != nil {
+		if strings.TrimSpace(*name) == "" {
+			return nil, errors.New("group name cannot be empty")
+		}
+		chat.Name = name
+	}
+	if err := s.chatRepo.Update(ctx, chat); err != nil {
+		return nil, fmt.Errorf("update chat: %w", err)
+	}
+
+	return chat, nil
+}
+
+func (s *chatService) AddMembers(ctx context.Context, userID, chatID string, memberIDs []string) error {
+	chat, err := s.chatRepo.GetByID(ctx, chatID)
+	if err != nil {
+		return fmt.Errorf("get chat: %w", err)
+	}
+	if chat == nil {
+		return errors.New("chat not found")
+	}
+	if chat.Type != model.ChatTypeGroup {
+		return errors.New("cannot add members to a private chat")
+	}
+
+	member, err := s.chatRepo.GetMember(ctx, chatID, userID)
+	if err != nil {
+		return fmt.Errorf("get member: %w", err)
+	}
+	if member == nil || (member.Role != model.RoleOwner && member.Role != model.RoleAdmin) {
+		return errors.New("only owner or admin can add members")
+	}
+
+	for _, id := range memberIDs {
+		if _, err := s.getExistingUser(ctx, id); err != nil {
+			return err
+		}
+
+		existing, _ := s.chatRepo.GetMember(ctx, chatID, id)
+		if existing != nil {
+			continue
+		}
+		if err := s.chatRepo.AddMember(ctx, chatID, id, model.RoleMember); err != nil {
+			return fmt.Errorf("add member %s: %w", id, err)
+		}
+	}
+
+	return nil
+}
+
+func (s *chatService) RemoveMember(ctx context.Context, userID, chatID, targetUserID string) error {
+	chat, err := s.chatRepo.GetByID(ctx, chatID)
+	if err != nil {
+		return fmt.Errorf("get chat: %w", err)
+	}
+	if chat == nil {
+		return errors.New("chat not found")
+	}
+
+	requester, err := s.chatRepo.GetMember(ctx, chatID, userID)
+	if err != nil {
+		return fmt.Errorf("get requester: %w", err)
+	}
+	if requester == nil {
+		return errors.New("you are not a member of this chat")
+	}
+
+	if userID == targetUserID {
+		if userID == chat.CreatedBy && chat.Type == model.ChatTypeGroup {
+			return errors.New("owner cannot leave the group; transfer ownership or delete the chat")
+		} else {
+			if requester.Role != model.RoleOwner && requester.Role != model.RoleAdmin {
+				return errors.New("only owner or admin can remove members")
+			}
+			if targetUserID == chat.CreatedBy {
+				return errors.New("cannot remove the owner")
+			}
+		}
+	}
+	target, err := s.chatRepo.GetMember(ctx, chatID, targetUserID)
+	if err != nil {
+		return fmt.Errorf("get target: %w", err)
+	}
+	if target == nil {
+		return errors.New("user is not a member of this chat")
+	}
+
+	return s.chatRepo.RemoveMember(ctx, chatID, targetUserID)
+}
+
+func (s *chatService) DeleteChat(ctx context.Context, userID, chatID string) error {
+	chat, err := s.chatRepo.GetByID(ctx, chatID)
+	if err != nil {
+		return fmt.Errorf("get chat: %w", err)
+	}
+	if chat == nil {
+		return errors.New("chat not found")
+	}
+	if chat.CreatedBy != userID {
+		return errors.New("only the owner can delete the chat")
+	}
+
+	return s.chatRepo.Delete(ctx, chatID)
 }
