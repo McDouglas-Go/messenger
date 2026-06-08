@@ -51,7 +51,8 @@ CREATE INDEX idx_messages_chat_sent ON messages (chat_id, sent_at);
 
 CREATE TABLE media (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    message_id UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    message_id UUID REFERENCES messages(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     file_path TEXT NOT NULL,                 
     mime_type VARCHAR(127) NOT NULL,
     size_bytes BIGINT NOT NULL,

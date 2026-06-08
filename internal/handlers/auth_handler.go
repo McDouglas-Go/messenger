@@ -123,11 +123,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.GetClaimsFromContext(r.Context())
-	if !ok {
-		http.Error(w, "Unathorized", http.StatusUnauthorized)
-		return
-	}
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
 
 	user, err := h.userRepo.GetByID(r.Context(), claims.UserID)
 	if err != nil {
@@ -198,11 +194,7 @@ func (h *AuthHandler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.GetClaimsFromContext(r.Context())
-	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
 
 	var req updateProfileRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -246,11 +238,7 @@ func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) DeleteProfile(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.GetClaimsFromContext(r.Context())
-	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
 
 	if err := h.authService.DeleteProfile(r.Context(), claims.UserID); err != nil {
 		h.log.Error("DeleteAccount failed", "error", err)

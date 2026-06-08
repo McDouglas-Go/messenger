@@ -13,6 +13,7 @@ type Config struct {
 	ServerPort    string
 	JWTSecret     string
 	JWTExpiration time.Duration
+	UploadDir     string
 }
 
 func Load() (*Config, error) {
@@ -29,6 +30,7 @@ func Load() (*Config, error) {
 		ServerPort:    getEnv("SERVER_PORT", "8080"),
 		JWTSecret:     getEnv("JWT_SECRET", "change-me-in-production"),
 		JWTExpiration: exp,
+		UploadDir:     getEnv("UPLOAD_DIR", "./uploads"),
 	}
 
 	return cfg, nil

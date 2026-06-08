@@ -5,7 +5,7 @@ import "time"
 type ContentType string
 
 const (
-	ContenttypeText  ContentType = "text"
+	ContentTypeText  ContentType = "text"
 	ContentTypeImage ContentType = "image"
 	ContentTypeVideo ContentType = "video"
 	ContentTypeFile  ContentType = "file"

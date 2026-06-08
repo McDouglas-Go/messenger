@@ -48,14 +48,17 @@ func main() {
 	userRepo := repository.NewUserRepository(pool)
 	chatRepo := repository.NewChatRepository(pool)
 	msgRepo := repository.NewMessageRepository(pool)
+	mediaRepo := repository.NewMediaRepository(pool)
 
 	authService := service.NewAuthService(userRepo, jwtManager)
 	chatServise := service.NewChatService(chatRepo, userRepo)
 	messageService := service.NewMessageService(msgRepo, chatRepo)
+	mediaService := service.NewMediaService(mediaRepo, msgRepo, chatRepo, cfg.UploadDir)
 
 	authHandler := handlers.NewAuthHandler(authService, userRepo, logger)
 	chatHandler := handlers.NewChatHandler(chatServise, logger)
 	messageHandler := handlers.Newmessagehandler(messageService, logger)
+	mediaHandler := handlers.NewMediahandler(mediaService, logger)
 
 	r := mux.NewRouter()
 
@@ -81,6 +84,9 @@ func main() {
 	api.HandleFunc("/chats/{chat_id}/messages", messageHandler.GetChatHistory).Methods("GET")
 	api.HandleFunc("/chats/{chat_id}/messages/{message_id}", messageHandler.EditMessage).Methods("PUT")
 	api.HandleFunc("/chats/{chat_id}/messages/{message_id}", messageHandler.DeleteMessage).Methods("DELETE")
+
+	api.HandleFunc("/media", mediaHandler.Upload).Methods("POST")
+	api.HandleFunc("/media/{media_id}", mediaHandler.Download).Methods("GET")
 	srv := &http.Server{
 		Addr:         ":" + cfg.ServerPort,
 		Handler:      r,

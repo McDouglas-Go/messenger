@@ -53,11 +53,7 @@ func NewChatHandler(chatService service.ChatService, logger *slog.Logger) *ChatH
 }
 
 func (h *ChatHandler) CreatePrivate(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.GetClaimsFromContext(r.Context())
-	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
 
 	currentUserID := claims.UserID
 
@@ -92,11 +88,7 @@ func (h *ChatHandler) CreatePrivate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ChatHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.GetClaimsFromContext(r.Context())
-	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
 
 	currentUserID := claims.UserID
 
@@ -136,11 +128,7 @@ func (h *ChatHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ChatHandler) GetUserChats(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.GetClaimsFromContext(r.Context())
-	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
 
 	chats, err := h.chatService.GetUserChats(r.Context(), claims.UserID)
 	if err != nil {
@@ -162,11 +150,7 @@ func (h *ChatHandler) GetUserChats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ChatHandler) UpdateChat(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.GetClaimsFromContext(r.Context())
-	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
 
 	chatID := mux.Vars(r)["chat_id"]
 	var req updateChatRequest
@@ -187,11 +171,7 @@ func (h *ChatHandler) UpdateChat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ChatHandler) AddMembers(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.GetClaimsFromContext(r.Context())
-	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
 	chatID := mux.Vars(r)["chat_id"]
 	var req addMembersRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -211,11 +191,8 @@ func (h *ChatHandler) AddMembers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ChatHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.GetClaimsFromContext(r.Context())
-	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
+
 	chatID := mux.Vars(r)["chat_id"]
 	var req removeMemberRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -235,11 +212,8 @@ func (h *ChatHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ChatHandler) DeleteChat(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.GetClaimsFromContext(r.Context())
-	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
+
 	chatID := mux.Vars(r)["chat_id"]
 	if err := h.chatService.DeleteChat(r.Context(), claims.UserID, chatID); err != nil {
 		h.log.Error("DeleteChat failed", "error", err)
