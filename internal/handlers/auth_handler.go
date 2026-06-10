@@ -42,19 +42,42 @@ type updateProfileRequest struct {
 }
 
 type AuthHandler struct {
-	authService service.AuthSerice
-	userRepo    repository.UserRepository
-	baseURL     string
-	log         *slog.Logger
+	authService  service.AuthSerice
+	userRepo     repository.UserRepository
+	baseURL      string
+	refreshTTL   time.Duration
+	cookieSecure bool
+	log          *slog.Logger
 }
 
-func NewAuthHandler(authService service.AuthSerice, userRepo repository.UserRepository, baseURL string, logger *slog.Logger) *AuthHandler {
+func NewAuthHandler(
+	authService service.AuthSerice,
+	userRepo repository.UserRepository,
+	baseURL string,
+	refreshTTL time.Duration,
+	cookieSecure bool,
+	logger *slog.Logger,
+) *AuthHandler {
 	return &AuthHandler{
-		authService: authService,
-		userRepo:    userRepo,
-		baseURL:     baseURL,
-		log:         logger,
+		authService:  authService,
+		userRepo:     userRepo,
+		baseURL:      baseURL,
+		refreshTTL:   refreshTTL,
+		cookieSecure: cookieSecure,
+		log:          logger,
 	}
+}
+
+func setRefreshTokenCookie(w http.ResponseWriter, token string, maxAge time.Duration, secure bool) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   int(maxAge.Seconds()),
+	})
 }
 
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
@@ -115,8 +138,9 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, status)
 		return
 	}
+	setRefreshTokenCookie(w, refreshToken, h.refreshTTL, h.cookieSecure)
 
-	resp := map[string]string{"access_token": accessToken, "refresh_token": refreshToken}
+	resp := map[string]string{"access_token": accessToken}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -126,23 +150,21 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		RefreshToken string `json:"refresh_token"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	cookie, err := r.Cookie("refresh_token")
+	if err != nil {
+		http.Error(w, "Refresh token missing", http.StatusUnauthorized)
 		return
 	}
-	defer r.Body.Close()
-
-	accessToken, refreshToken, err := h.authService.RefreshToken(r.Context(), req.RefreshToken)
+	refreshToken := cookie.Value
+	accessToken, newRefreshToken, err := h.authService.RefreshToken(r.Context(), refreshToken)
 	if err != nil {
 		h.log.Error("RefreshToken failed", "error", err)
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
+	setRefreshTokenCookie(w, newRefreshToken, h.refreshTTL, h.cookieSecure)
 
-	resp := map[string]string{"access_token": accessToken, "refresh_token": refreshToken}
+	resp := map[string]string{"access_token": accessToken}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -152,20 +174,28 @@ func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		RefreshToken string `json:"refresh_token"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	cookie, err := r.Cookie("refresh_token")
+	if err != nil {
+		http.Error(w, "Refresh token missing", http.StatusUnauthorized)
 		return
 	}
-	defer r.Body.Close()
+	refreshToken := cookie.Value
 
-	if err := h.authService.Logout(r.Context(), req.RefreshToken); err != nil {
+	if err := h.authService.Logout(r.Context(), refreshToken); err != nil {
 		h.log.Error("Logout failed", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   h.cookieSecure,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 

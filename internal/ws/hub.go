@@ -1,10 +1,12 @@
 package ws
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"sync"
 
+	"github.com/McDouglas-Go/messenger/internal/repository"
 	"github.com/gorilla/websocket"
 )
 
@@ -16,15 +18,17 @@ type Client struct {
 }
 
 type Hub struct {
-	mu      sync.RWMutex
-	clients map[string]map[*Client]bool
-	logger  *slog.Logger
+	mu       sync.RWMutex
+	clients  map[string]map[*Client]bool
+	chatRepo repository.ChatRepository
+	logger   *slog.Logger
 }
 
-func NewHub(logger *slog.Logger) *Hub {
+func NewHub(chatRepo repository.ChatRepository, logger *slog.Logger) *Hub {
 	return &Hub{
-		clients: make(map[string]map[*Client]bool),
-		logger:  logger,
+		clients:  make(map[string]map[*Client]bool),
+		chatRepo: chatRepo,
+		logger:   logger,
 	}
 }
 
@@ -74,4 +78,48 @@ func (h *Hub) SendToUser(userID string, message interface{}) error {
 	}
 
 	return nil
+}
+
+func (h *Hub) BroadcastTyping(ctx context.Context, senderID, chatID string) {
+	members, err := h.chatRepo.GetChatMembers(ctx, chatID)
+	if err != nil {
+		h.logger.Error("failed to get chat members for typing event", "error", err, "chat_id", chatID)
+		return
+	}
+
+	event := map[string]interface{}{
+		"event": "typing",
+		"data": map[string]string{
+			"chat_id": chatID,
+			"user_id": senderID,
+		},
+	}
+	for _, member := range members {
+		if member.UserID == senderID {
+			continue
+		}
+		h.SendToUser(member.UserID, event)
+	}
+}
+
+func (h *Hub) BroadcastStopTyping(ctx context.Context, senderID, chatID string) {
+	members, err := h.chatRepo.GetChatMembers(ctx, chatID)
+	if err != nil {
+		h.logger.Error("failed to get chat members for typing event", "error", err, "chat_id", chatID)
+		return
+	}
+
+	event := map[string]interface{}{
+		"event": "stop_typing",
+		"data": map[string]string{
+			"chat_id": chatID,
+			"user_id": senderID,
+		},
+	}
+	for _, member := range members {
+		if member.UserID == senderID {
+			continue
+		}
+		h.SendToUser(member.UserID, event)
+	}
 }

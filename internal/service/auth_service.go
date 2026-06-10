@@ -217,17 +217,16 @@ func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (st
 	if session == nil {
 		return "", "", errors.New("invalid refresh token")
 	}
-
-	if err := s.sessionRepo.Delete(ctx, session.ID); err != nil {
-		return "", "", fmt.Errorf("delete old session: %w", err)
-	}
-
 	user, err := s.userRepo.GetByID(ctx, session.UserID)
 	if err != nil {
 		return "", "", fmt.Errorf("get user: %w", err)
 	}
 	if user == nil {
 		return "", "", errors.New("user not found")
+	}
+
+	if err := s.sessionRepo.Delete(ctx, session.ID); err != nil {
+		return "", "", fmt.Errorf("delete old session: %w", err)
 	}
 
 	newAccessToken, err := s.jwtManager.Generate(user.ID, user.Username)

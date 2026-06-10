@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -45,20 +46,21 @@ func main() {
 		os.Exit(1)
 	}
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTExpiration)
-	hub := ws.NewHub(logger)
+	cookieSecure := strings.HasPrefix(cfg.BaseURL, "https")
 
 	userRepo := repository.NewUserRepository(pool)
 	sessionRepo := repository.NewSessionRepository(pool)
 	chatRepo := repository.NewChatRepository(pool)
 	msgRepo := repository.NewMessageRepository(pool)
 	mediaRepo := repository.NewMediaRepository(pool)
+	hub := ws.NewHub(chatRepo, logger)
 
 	authService := service.NewAuthService(userRepo, sessionRepo, jwtManager, cfg.RefreshTokenTTL)
 	chatServise := service.NewChatService(chatRepo, userRepo)
 	messageService := service.NewMessageService(msgRepo, chatRepo, hub)
 	mediaService := service.NewMediaService(mediaRepo, msgRepo, chatRepo, cfg.UploadDir)
 
-	authHandler := handlers.NewAuthHandler(authService, userRepo, cfg.BaseURL, logger)
+	authHandler := handlers.NewAuthHandler(authService, userRepo, cfg.BaseURL, cfg.RefreshTokenTTL, cookieSecure, logger)
 	chatHandler := handlers.NewChatHandler(chatServise, logger)
 	messageHandler := handlers.Newmessagehandler(messageService, logger)
 	mediaHandler := handlers.NewMediahandler(mediaService, logger)

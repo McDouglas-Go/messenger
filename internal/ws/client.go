@@ -1,6 +1,8 @@
 package ws
 
 import (
+	"context"
+	"encoding/json"
 	"log/slog"
 	"time"
 
@@ -40,12 +42,35 @@ func (c *Client) readPump(logger *slog.Logger) {
 		return nil
 	})
 	for {
-		_, _, err := c.conn.ReadMessage()
+		_, message, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				logger.Error("WebSocket read error", "user_id", c.userID, "error", err)
 			}
 			break
+		}
+		var wsMsg struct {
+			Event string `json:"event"`
+			Data  struct {
+				ChatID string `json:"chat_id"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(message, &wsMsg); err != nil {
+			logger.Warn("invalid ws message", "user_id", c.userID, "raw", string(message))
+			continue
+		}
+
+		switch wsMsg.Event {
+		case "typing":
+			if wsMsg.Data.ChatID != "" {
+				c.hub.BroadcastTyping(context.Background(), c.userID, wsMsg.Data.ChatID)
+			}
+		case "stop_typing":
+			if wsMsg.Data.ChatID != "" {
+				c.hub.BroadcastStopTyping(context.Background(), c.userID, wsMsg.Data.ChatID)
+			}
+		default:
+			logger.Debug("unknown ws event", "event", wsMsg.Event)
 		}
 	}
 }
