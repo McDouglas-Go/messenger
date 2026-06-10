@@ -16,6 +16,7 @@ import (
 	"github.com/McDouglas-Go/messenger/internal/middleware"
 	"github.com/McDouglas-Go/messenger/internal/repository"
 	"github.com/McDouglas-Go/messenger/internal/service"
+	"github.com/McDouglas-Go/messenger/internal/ws"
 	"github.com/gorilla/mux"
 )
 
@@ -44,6 +45,7 @@ func main() {
 		os.Exit(1)
 	}
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTExpiration)
+	hub := ws.NewHub(logger)
 
 	userRepo := repository.NewUserRepository(pool)
 	sessionRepo := repository.NewSessionRepository(pool)
@@ -53,13 +55,14 @@ func main() {
 
 	authService := service.NewAuthService(userRepo, sessionRepo, jwtManager, cfg.RefreshTokenTTL)
 	chatServise := service.NewChatService(chatRepo, userRepo)
-	messageService := service.NewMessageService(msgRepo, chatRepo)
+	messageService := service.NewMessageService(msgRepo, chatRepo, hub)
 	mediaService := service.NewMediaService(mediaRepo, msgRepo, chatRepo, cfg.UploadDir)
 
 	authHandler := handlers.NewAuthHandler(authService, userRepo, cfg.BaseURL, logger)
 	chatHandler := handlers.NewChatHandler(chatServise, logger)
 	messageHandler := handlers.Newmessagehandler(messageService, logger)
 	mediaHandler := handlers.NewMediahandler(mediaService, logger)
+	wsHandler := handlers.NewWSHandler(hub, logger)
 
 	r := mux.NewRouter()
 
@@ -70,11 +73,14 @@ func main() {
 
 	api := r.NewRoute().Subrouter()
 	api.Use(middleware.AuthMiddleware(jwtManager))
+	api.HandleFunc("/ws", wsHandler.ServeWS)
+
 	api.HandleFunc("/me", authHandler.Me).Methods("GET")
 	api.HandleFunc("/me", authHandler.UpdateProfile).Methods("PUT")
 	api.HandleFunc("/me", authHandler.DeleteProfile).Methods("DELETE")
 
 	api.HandleFunc("/users", authHandler.SearchUsers).Methods("GET")
+
 	api.HandleFunc("/chats/private", chatHandler.CreatePrivate).Methods("POST")
 	api.HandleFunc("/chats/group", chatHandler.CreateGroup).Methods("POST")
 	api.HandleFunc("/chats", chatHandler.GetUserChats).Methods("GET")
@@ -82,7 +88,6 @@ func main() {
 	api.HandleFunc("/chats/{chat_id}/members", chatHandler.AddMembers).Methods("POST")
 	api.HandleFunc("/chats/{chat_id}/members", chatHandler.RemoveMember).Methods("DELETE")
 	api.HandleFunc("/chats/{chat_id}", chatHandler.DeleteChat).Methods("DELETE")
-
 	api.HandleFunc("/chats/{chat_id}/messages", messageHandler.Send).Methods("POST")
 	api.HandleFunc("/chats/{chat_id}/messages", messageHandler.GetChatHistory).Methods("GET")
 	api.HandleFunc("/chats/{chat_id}/messages/{message_id}", messageHandler.EditMessage).Methods("PUT")

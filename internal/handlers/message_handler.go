@@ -104,7 +104,7 @@ func (h *MessageHandler) Send(w http.ResponseWriter, r *http.Request) {
 		ContentType:      model.ContentType(req.ContentType),
 	}
 
-	if _, err := h.messageService.Send(r.Context(), claims.UserID, msg); err != nil {
+	if err := h.messageService.Send(r.Context(), claims.UserID, msg); err != nil {
 		h.log.Error("failed to send message", "error", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

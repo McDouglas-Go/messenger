@@ -7,10 +7,11 @@ import (
 
 	"github.com/McDouglas-Go/messenger/internal/model"
 	"github.com/McDouglas-Go/messenger/internal/repository"
+	"github.com/McDouglas-Go/messenger/internal/ws"
 )
 
 type MesssageService interface {
-	Send(ctx context.Context, senderID string, msg *model.EncryptedMessage) (*model.EncryptedMessage, error)
+	Send(ctx context.Context, senderID string, msg *model.EncryptedMessage) error
 	GetChatHistory(ctx context.Context, chatID, userID string, limit, offset int) ([]*model.EncryptedMessage, error)
 	EditMessage(ctx context.Context,
 		userID, chatID, messageID string,
@@ -24,19 +25,21 @@ type MesssageService interface {
 type messageService struct {
 	msgRepo  repository.MessageRepository
 	chatRepo repository.ChatRepository
+	hub      *ws.Hub
 }
 
-func NewMessageService(msgRepo repository.MessageRepository, chatRepo repository.ChatRepository) MesssageService {
+func NewMessageService(msgRepo repository.MessageRepository, chatRepo repository.ChatRepository, hub *ws.Hub) MesssageService {
 	return &messageService{
 		msgRepo:  msgRepo,
 		chatRepo: chatRepo,
+		hub:      hub,
 	}
 }
 
-func (s *messageService) Send(ctx context.Context, senderID string, msg *model.EncryptedMessage) (*model.EncryptedMessage, error) {
+func (s *messageService) Send(ctx context.Context, senderID string, msg *model.EncryptedMessage) error {
 	members, err := s.chatRepo.GetChatMembers(ctx, msg.ChatID)
 	if err != nil {
-		return nil, fmt.Errorf("get chat members: %w", err)
+		return fmt.Errorf("get chat members: %w", err)
 	}
 
 	isMember := false
@@ -47,15 +50,25 @@ func (s *messageService) Send(ctx context.Context, senderID string, msg *model.E
 		}
 	}
 	if !isMember {
-		return nil, errors.New("sender is not a member of the chat")
+		return errors.New("sender is not a member of the chat")
 	}
 
 	msg.SenderID = senderID
 
 	if err := s.msgRepo.Create(ctx, msg); err != nil {
-		return nil, fmt.Errorf("create message: %w", err)
+		return fmt.Errorf("create message: %w", err)
 	}
-	return msg, nil
+	event := map[string]interface{}{
+		"event": "new_message",
+		"data":  msg,
+	}
+	for _, member := range members {
+		if member.UserID != senderID {
+			s.hub.SendToUser(member.UserID, event)
+		}
+	}
+
+	return nil
 }
 
 func (s *messageService) GetChatHistory(ctx context.Context, chatID, userID string, limit, offset int) ([]*model.EncryptedMessage, error) {
