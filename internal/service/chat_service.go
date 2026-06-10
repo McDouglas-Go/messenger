@@ -256,9 +256,10 @@ func (s *chatService) DeleteChat(ctx context.Context, userID, chatID string) err
 	if chat == nil {
 		return errors.New("chat not found")
 	}
-	if chat.CreatedBy != userID {
-		return errors.New("only the owner can delete the chat")
+	if chat.Type != model.ChatTypePrivate {
+		if chat.CreatedBy != userID {
+			return errors.New("only the owner can delete the chat")
+		}
 	}
-
 	return s.chatRepo.Delete(ctx, chatID)
 }

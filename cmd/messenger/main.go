@@ -46,26 +46,29 @@ func main() {
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTExpiration)
 
 	userRepo := repository.NewUserRepository(pool)
+	sessionRepo := repository.NewSessionRepository(pool)
 	chatRepo := repository.NewChatRepository(pool)
 	msgRepo := repository.NewMessageRepository(pool)
 	mediaRepo := repository.NewMediaRepository(pool)
 
-	authService := service.NewAuthService(userRepo, jwtManager)
+	authService := service.NewAuthService(userRepo, sessionRepo, jwtManager, cfg.RefreshTokenTTL)
 	chatServise := service.NewChatService(chatRepo, userRepo)
 	messageService := service.NewMessageService(msgRepo, chatRepo)
 	mediaService := service.NewMediaService(mediaRepo, msgRepo, chatRepo, cfg.UploadDir)
 
-	authHandler := handlers.NewAuthHandler(authService, userRepo, logger)
+	authHandler := handlers.NewAuthHandler(authService, userRepo, cfg.BaseURL, logger)
 	chatHandler := handlers.NewChatHandler(chatServise, logger)
 	messageHandler := handlers.Newmessagehandler(messageService, logger)
 	mediaHandler := handlers.NewMediahandler(mediaService, logger)
 
 	r := mux.NewRouter()
 
-	r.HandleFunc("/api/register", authHandler.Register).Methods("POST")
-	r.HandleFunc("/api/login", authHandler.Login).Methods("POST")
+	r.HandleFunc("/register", authHandler.Register).Methods("POST")
+	r.HandleFunc("/login", authHandler.Login).Methods("POST")
+	r.HandleFunc("/refresh", authHandler.RefreshToken).Methods("POST")
+	r.HandleFunc("/logout", authHandler.Logout).Methods("POST")
 
-	api := r.PathPrefix("/api").Subrouter()
+	api := r.NewRoute().Subrouter()
 	api.Use(middleware.AuthMiddleware(jwtManager))
 	api.HandleFunc("/me", authHandler.Me).Methods("GET")
 	api.HandleFunc("/me", authHandler.UpdateProfile).Methods("PUT")

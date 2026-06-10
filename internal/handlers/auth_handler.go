@@ -44,13 +44,15 @@ type updateProfileRequest struct {
 type AuthHandler struct {
 	authService service.AuthSerice
 	userRepo    repository.UserRepository
+	baseURL     string
 	log         *slog.Logger
 }
 
-func NewAuthHandler(authService service.AuthSerice, userRepo repository.UserRepository, logger *slog.Logger) *AuthHandler {
+func NewAuthHandler(authService service.AuthSerice, userRepo repository.UserRepository, baseURL string, logger *slog.Logger) *AuthHandler {
 	return &AuthHandler{
 		authService: authService,
 		userRepo:    userRepo,
+		baseURL:     baseURL,
 		log:         logger,
 	}
 }
@@ -102,7 +104,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	token, err := h.authService.Login(r.Context(), input)
+	accessToken, refreshToken, err := h.authService.Login(r.Context(), input, r.UserAgent(), r.RemoteAddr)
 	if err != nil {
 		status := http.StatusInternalServerError
 		msg := "Internal server error"
@@ -114,12 +116,57 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := map[string]string{"token": token}
+	resp := map[string]string{"access_token": accessToken, "refresh_token": refreshToken}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		h.log.Error("Failed to encode login response", "error", err)
 	}
+}
+
+func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	accessToken, refreshToken, err := h.authService.RefreshToken(r.Context(), req.RefreshToken)
+	if err != nil {
+		h.log.Error("RefreshToken failed", "error", err)
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	resp := map[string]string{"access_token": accessToken, "refresh_token": refreshToken}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		h.log.Error("Failed to encode login response", "error", err)
+	}
+}
+
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	if err := h.authService.Logout(r.Context(), req.RefreshToken); err != nil {
+		h.log.Error("Logout failed", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
@@ -135,6 +182,10 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "User not found", http.StatusNotFound)
 		return
 	}
+	profilePhoto := ""
+	if user.ProfilePhotoURL != "" {
+		profilePhoto = h.baseURL + "/api/media/" + user.ProfilePhotoURL
+	}
 
 	resp := userResponse{
 		ID:              user.ID,
@@ -142,7 +193,7 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		Email:           user.Email,
 		DisplayName:     user.DisplayName,
 		About:           user.About,
-		ProfilePhotoURL: user.ProfilePhotoURL,
+		ProfilePhotoURL: profilePhoto,
 		CreatedAt:       user.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:       user.UpdatedAt.Format(time.RFC3339),
 	}
@@ -175,12 +226,16 @@ func (h *AuthHandler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]SearchUserResponse, 0, len(users))
 	for _, u := range users {
+		profilePhoto := ""
+		if u.ProfilePhotoURL != "" {
+			profilePhoto = h.baseURL + "/api/media/" + u.ProfilePhotoURL
+		}
 		resp = append(resp, SearchUserResponse{
 			ID:              u.ID,
 			Username:        u.Username,
 			DisplayName:     u.DisplayName,
 			About:           u.About,
-			ProfilePhotoURL: u.ProfilePhotoURL,
+			ProfilePhotoURL: profilePhoto,
 			CreatedAt:       u.CreatedAt.Format(time.RFC3339),
 			UpdatedAt:       u.UpdatedAt.Format(time.RFC3339),
 		})
@@ -220,6 +275,10 @@ func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	profilePhoto := ""
+	if user.ProfilePhotoURL != "" {
+		profilePhoto = h.baseURL + "/api/media/" + user.ProfilePhotoURL
+	}
 
 	resp := userResponse{
 		ID:              user.ID,
@@ -227,7 +286,7 @@ func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		Email:           user.Email,
 		DisplayName:     user.DisplayName,
 		About:           user.About,
-		ProfilePhotoURL: user.ProfilePhotoURL,
+		ProfilePhotoURL: profilePhoto,
 		CreatedAt:       user.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:       user.UpdatedAt.Format(time.RFC3339),
 	}

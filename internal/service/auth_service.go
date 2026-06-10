@@ -2,9 +2,13 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/McDouglas-Go/messenger/internal/auth"
@@ -18,13 +22,6 @@ var (
 	ErrEmailTaken    = errors.New("email already exists")
 	ErrUsernameTaken = errors.New("username alredy taken")
 )
-
-type AuthSerice interface {
-	Register(ctx context.Context, input RegisterInput) (*model.User, error)
-	Login(ctx context.Context, input LoginInput) (string, error)
-	UpdateProfile(ctx context.Context, userID string, input UpdateProfileInput) (*model.User, error)
-	DeleteProfile(ctx context.Context, userID string) error
-}
 
 type RegisterInput struct {
 	Username        string `json:"username"`
@@ -47,12 +44,33 @@ type UpdateProfileInput struct {
 }
 
 type authService struct {
-	userRepo   repository.UserRepository
-	jwtManager *auth.JWTManager
+	userRepo    repository.UserRepository
+	sessionRepo repository.SessionRepository
+	jwtManager  *auth.JWTManager
+	refreshTTL  time.Duration
 }
 
-func NewAuthService(userRepo repository.UserRepository, jwtManager *auth.JWTManager) AuthSerice {
-	return &authService{userRepo: userRepo, jwtManager: jwtManager}
+type AuthSerice interface {
+	Register(ctx context.Context, input RegisterInput) (*model.User, error)
+	Login(ctx context.Context, input LoginInput, userAgent, ip string) (string, string, error)
+	RefreshToken(ctx context.Context, refreshToken string) (string, string, error)
+	Logout(ctx context.Context, refreshToken string) error
+	UpdateProfile(ctx context.Context, userID string, input UpdateProfileInput) (*model.User, error)
+	DeleteProfile(ctx context.Context, userID string) error
+}
+
+func NewAuthService(
+	userRepo repository.UserRepository,
+	sessionRepo repository.SessionRepository,
+	jwtManager *auth.JWTManager,
+	refreshTTL time.Duration,
+) AuthSerice {
+	return &authService{
+		userRepo:    userRepo,
+		sessionRepo: sessionRepo,
+		jwtManager:  jwtManager,
+		refreshTTL:  refreshTTL,
+	}
 }
 
 func (s *authService) Register(ctx context.Context, input RegisterInput) (*model.User, error) {
@@ -138,25 +156,116 @@ func hashPassword(password string) (string, error) {
 	return string(bytes), nil
 }
 
-func (s *authService) Login(ctx context.Context, input LoginInput) (string, error) {
+func GenerateRefreshToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate random bytes: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func hashToken(token string) string {
+	hash := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(hash[:])
+}
+
+func (s *authService) Login(ctx context.Context, input LoginInput, userAgent, ip string) (string, string, error) {
 	user, err := s.userRepo.GetByEmail(ctx, input.Email)
 	if err != nil {
-		return "", fmt.Errorf("get user by email: %w", err)
+		return "", "", fmt.Errorf("get user by email: %w", err)
 	}
 	if user == nil {
-		return "", fmt.Errorf("invalid email or password")
+		return "", "", fmt.Errorf("invalid email or password")
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.Password)); err != nil {
-		return "", fmt.Errorf("invalid email or password")
+		return "", "", fmt.Errorf("invalid email or password")
 	}
 
-	token, err := s.jwtManager.Generate(user.ID, user.Username)
+	accessToken, err := s.jwtManager.Generate(user.ID, user.Username)
 	if err != nil {
-		return "", fmt.Errorf("generate token: %w", err)
+		return "", "", fmt.Errorf("generate access token: %w", err)
+	}
+	refreshToken, err := GenerateRefreshToken()
+	if err != nil {
+		return "", "", err
 	}
 
-	return token, nil
+	hash := hashToken(refreshToken)
+
+	session := &model.Session{
+		UserID:           user.ID,
+		RefreshTokenHash: hash,
+		UserAgent:        userAgent,
+		IPAddress:        ip,
+		ExpiresAt:        time.Now().Add(s.refreshTTL),
+	}
+	if err := s.sessionRepo.Create(ctx, session); err != nil {
+		return "", "", fmt.Errorf("create session: %w", err)
+	}
+
+	return accessToken, refreshToken, nil
+}
+
+func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (string, string, error) {
+	hash := hashToken(refreshToken)
+
+	session, err := s.sessionRepo.GetByRefreshTokenHash(ctx, hash)
+	if err != nil {
+		return "", "", fmt.Errorf("get session: %w", err)
+	}
+	if session == nil {
+		return "", "", errors.New("invalid refresh token")
+	}
+
+	if err := s.sessionRepo.Delete(ctx, session.ID); err != nil {
+		return "", "", fmt.Errorf("delete old session: %w", err)
+	}
+
+	user, err := s.userRepo.GetByID(ctx, session.UserID)
+	if err != nil {
+		return "", "", fmt.Errorf("get user: %w", err)
+	}
+	if user == nil {
+		return "", "", errors.New("user not found")
+	}
+
+	newAccessToken, err := s.jwtManager.Generate(user.ID, user.Username)
+	if err != nil {
+		return "", "", fmt.Errorf("generate access token: %w", err)
+	}
+
+	newRefreshToken, err := GenerateRefreshToken()
+	if err != nil {
+		return "", "", err
+	}
+
+	newHash := hashToken(newRefreshToken)
+	newSession := &model.Session{
+		UserID:           user.ID,
+		RefreshTokenHash: newHash,
+		UserAgent:        session.UserAgent,
+		IPAddress:        session.IPAddress,
+		ExpiresAt:        time.Now().Add(s.refreshTTL),
+	}
+	if err := s.sessionRepo.Create(ctx, newSession); err != nil {
+		return "", "", fmt.Errorf("create new session: %w", err)
+	}
+
+	return newAccessToken, newRefreshToken, nil
+}
+
+func (s *authService) Logout(ctx context.Context, refreshToken string) error {
+	hash := hashToken(refreshToken)
+	session, err := s.sessionRepo.GetByRefreshTokenHash(ctx, hash)
+	if err != nil {
+		return fmt.Errorf("get session: %w", err)
+	}
+	if session == nil {
+		return nil
+	}
+
+	return s.sessionRepo.Delete(ctx, session.ID)
 }
 
 func (s *authService) UpdateProfile(ctx context.Context, userID string, input UpdateProfileInput) (*model.User, error) {

@@ -127,6 +127,10 @@ func (s *mediaService) Get(ctx context.Context, id, userID string) (*model.Media
 		if !isMember {
 			return nil, errors.New("access denied")
 		}
+	} else if media.UserID != nil {
+		//nothing to do
+	} else {
+		return nil, errors.New("invalid media record")
 	}
 
 	return media, nil

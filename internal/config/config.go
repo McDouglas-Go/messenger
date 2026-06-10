@@ -9,11 +9,13 @@ import (
 )
 
 type Config struct {
-	DatabaseURL   string
-	ServerPort    string
-	JWTSecret     string
-	JWTExpiration time.Duration
-	UploadDir     string
+	DatabaseURL     string
+	ServerPort      string
+	JWTSecret       string
+	JWTExpiration   time.Duration
+	UploadDir       string
+	BaseURL         string
+	RefreshTokenTTL time.Duration
 }
 
 func Load() (*Config, error) {
@@ -24,13 +26,16 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid JWT_EXPIRATION: %w", err)
 	}
+	refreshTTL, _ := time.ParseDuration(getEnv("REFRESH_TOKEN_TTL", "720h"))
 
 	cfg := &Config{
-		DatabaseURL:   getEnv("DATABASE_URL", "postgres://postgres:password@localhost:5432/messenger?sslmode=disable"),
-		ServerPort:    getEnv("SERVER_PORT", "8080"),
-		JWTSecret:     getEnv("JWT_SECRET", "change-me-in-production"),
-		JWTExpiration: exp,
-		UploadDir:     getEnv("UPLOAD_DIR", "./uploads"),
+		DatabaseURL:     getEnv("DATABASE_URL", "postgres://postgres:password@localhost:5432/messenger?sslmode=disable"),
+		ServerPort:      getEnv("SERVER_PORT", "8080"),
+		JWTSecret:       getEnv("JWT_SECRET", "change-me-in-production"),
+		JWTExpiration:   exp,
+		UploadDir:       getEnv("UPLOAD_DIR", "./uploads"),
+		BaseURL:         getEnv("BASE_URL", "http://localhost:8080"),
+		RefreshTokenTTL: refreshTTL,
 	}
 
 	return cfg, nil
