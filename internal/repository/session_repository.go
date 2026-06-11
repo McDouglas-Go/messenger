@@ -13,6 +13,8 @@ import (
 type SessionRepository interface {
 	Create(ctx context.Context, session *model.Session) error
 	GetByRefreshTokenHash(ctx context.Context, hash string) (*model.Session, error)
+	GetByID(ctx context.Context, id string) (*model.Session, error)
+	GetByUserID(ctx context.Context, userID string) ([]*model.Session, error)
 	Delete(ctx context.Context, id string) error
 	DeleteByUserID(ctx context.Context, userID string) error
 }
@@ -73,6 +75,66 @@ func (r *pgSessionRepository) GetByRefreshTokenHash(ctx context.Context, hash st
 		return nil, nil
 	}
 	return s, nil
+}
+
+func (r *pgSessionRepository) GetByID(ctx context.Context, id string) (*model.Session, error) {
+	query := `
+        SELECT id, user_id, refresh_token_hash, user_agent, ip_address, expires_at, created_at
+        FROM sessions
+        WHERE id = $1`
+
+	s := &model.Session{}
+	err := r.pool.QueryRow(ctx, query, id).Scan(
+		&s.ID,
+		&s.UserID,
+		&s.RefreshTokenHash,
+		&s.UserAgent,
+		&s.IPAddress,
+		&s.ExpiresAt,
+		&s.CreatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get session by id: %w", err)
+	}
+
+	return s, nil
+}
+
+func (r *pgSessionRepository) GetByUserID(ctx context.Context, userID string) ([]*model.Session, error) {
+	query := `
+        SELECT id, user_id, refresh_token_hash, user_agent, ip_address, expires_at, created_at
+        FROM sessions
+        WHERE user_id = $1
+        ORDER BY created_at DESC`
+
+	rows, err := r.pool.Query(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("get sessions by user: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []*model.Session
+	for rows.Next() {
+		s := &model.Session{}
+		err := rows.Scan(
+			&s.ID,
+			&s.UserID,
+			&s.RefreshTokenHash,
+			&s.UserAgent,
+			&s.IPAddress,
+			&s.ExpiresAt,
+			&s.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan session: %w", err)
+		}
+		sessions = append(sessions, s)
+	}
+
+	return sessions, rows.Err()
 }
 
 func (r *pgSessionRepository) Delete(ctx context.Context, id string) error {

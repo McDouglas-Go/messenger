@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/McDouglas-Go/messenger/internal/model"
 	"github.com/McDouglas-Go/messenger/internal/repository"
@@ -26,13 +27,15 @@ type messageService struct {
 	msgRepo  repository.MessageRepository
 	chatRepo repository.ChatRepository
 	hub      *ws.Hub
+	logger   *slog.Logger
 }
 
-func NewMessageService(msgRepo repository.MessageRepository, chatRepo repository.ChatRepository, hub *ws.Hub) MesssageService {
+func NewMessageService(msgRepo repository.MessageRepository, chatRepo repository.ChatRepository, hub *ws.Hub, logger *slog.Logger) MesssageService {
 	return &messageService{
 		msgRepo:  msgRepo,
 		chatRepo: chatRepo,
 		hub:      hub,
+		logger:   logger,
 	}
 }
 
@@ -120,6 +123,19 @@ func (s *messageService) EditMessage(ctx context.Context,
 		return nil, fmt.Errorf("update message: %w", err)
 	}
 
+	members, err := s.chatRepo.GetChatMembers(ctx, chatID)
+	if err != nil {
+		s.logger.Error("failed to get chat members for edit broadcast", "error", err, "chat_id", chatID)
+	} else {
+		event := map[string]interface{}{
+			"event": "message_updated",
+			"data":  msg,
+		}
+		for _, member := range members {
+			s.hub.SendToUser(member.UserID, event)
+		}
+	}
+
 	return msg, nil
 }
 
@@ -150,5 +166,24 @@ func (s *messageService) DeleteMessage(ctx context.Context, userID, chatID, mess
 		return errors.New("only the sender or admin of group can delete the message")
 	}
 
-	return s.msgRepo.Delete(ctx, messageID)
+	if err := s.msgRepo.Delete(ctx, messageID); err != nil {
+		return err
+	}
+
+	members, err := s.chatRepo.GetChatMembers(ctx, chatID)
+	if err != nil {
+		s.logger.Error("failed to get chat members for delete broadcast", "error", err, "chat_id", chatID)
+	} else {
+		event := map[string]interface{}{
+			"event": "message_deleted",
+			"data": map[string]string{
+				"message_id": messageID,
+				"chat_id":    chatID,
+			},
+		}
+		for _, member := range members {
+			s.hub.SendToUser(member.UserID, event)
+		}
+	}
+	return nil
 }

@@ -55,9 +55,9 @@ func main() {
 	mediaRepo := repository.NewMediaRepository(pool)
 	hub := ws.NewHub(chatRepo, logger)
 
-	authService := service.NewAuthService(userRepo, sessionRepo, jwtManager, cfg.RefreshTokenTTL)
+	authService := service.NewAuthService(userRepo, sessionRepo, jwtManager, cfg.RefreshTokenTTL, logger)
 	chatServise := service.NewChatService(chatRepo, userRepo)
-	messageService := service.NewMessageService(msgRepo, chatRepo, hub)
+	messageService := service.NewMessageService(msgRepo, chatRepo, hub, logger)
 	mediaService := service.NewMediaService(mediaRepo, msgRepo, chatRepo, cfg.UploadDir)
 
 	authHandler := handlers.NewAuthHandler(authService, userRepo, cfg.BaseURL, cfg.RefreshTokenTTL, cookieSecure, logger)
@@ -80,6 +80,9 @@ func main() {
 	api.HandleFunc("/me", authHandler.Me).Methods("GET")
 	api.HandleFunc("/me", authHandler.UpdateProfile).Methods("PUT")
 	api.HandleFunc("/me", authHandler.DeleteProfile).Methods("DELETE")
+
+	api.HandleFunc("/sessions", authHandler.ListSessions).Methods("GET")
+	api.HandleFunc("/sessions/{id}", authHandler.RevokeSession).Methods("DELETE")
 
 	api.HandleFunc("/users", authHandler.SearchUsers).Methods("GET")
 

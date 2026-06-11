@@ -8,9 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/McDouglas-Go/messenger/internal/auth"
 	"github.com/McDouglas-Go/messenger/internal/middleware"
 	"github.com/McDouglas-Go/messenger/internal/repository"
 	"github.com/McDouglas-Go/messenger/internal/service"
+	"github.com/gorilla/mux"
 )
 
 type userResponse struct {
@@ -156,7 +158,11 @@ func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	refreshToken := cookie.Value
-	accessToken, newRefreshToken, err := h.authService.RefreshToken(r.Context(), refreshToken)
+	accessToken, newRefreshToken, err := h.authService.RefreshToken(
+		r.Context(),
+		refreshToken,
+		r.UserAgent(),
+	)
 	if err != nil {
 		h.log.Error("RefreshToken failed", "error", err)
 		http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -333,6 +339,84 @@ func (h *AuthHandler) DeleteProfile(w http.ResponseWriter, r *http.Request) {
 		h.log.Error("DeleteAccount failed", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *AuthHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
+
+	sessions, err := h.authService.ListSessions(r.Context(), claims.UserID)
+	if err != nil {
+		h.log.Error("ListSessions failed", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	currentSessionID := ""
+	if cookie, err := r.Cookie("refresh_token"); err == nil {
+		hash := auth.HashToken(cookie.Value)
+		for _, s := range sessions {
+			if s.RefreshTokenHash == hash {
+				currentSessionID = s.ID
+				break
+			}
+		}
+	}
+
+	type sessionResp struct {
+		ID        string `json:"id"`
+		UserAgent string `json:"user_agent"`
+		IPAddress string `json:"ip_address"`
+		CreatedAt string `json:"created_at"`
+		ExpiresAt string `json:"expires_at"`
+		IsCurrent bool   `json:"is_current"`
+	}
+	resp := make([]sessionResp, 0, len(sessions))
+	for _, s := range sessions {
+		resp = append(resp, sessionResp{
+			ID:        s.UserID,
+			UserAgent: s.UserAgent,
+			IPAddress: s.IPAddress,
+			CreatedAt: s.CreatedAt.Format(time.RFC3339),
+			ExpiresAt: s.ExpiresAt.Format(time.RFC3339),
+			IsCurrent: s.ID == currentSessionID,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *AuthHandler) RevokeSession(w http.ResponseWriter, r *http.Request) {
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
+	sessionID := mux.Vars(r)["id"]
+	if sessionID == "" {
+		http.Error(w, "session id required", http.StatusBadRequest)
+		return
+	}
+	var currentHash string
+	if cookie, err := r.Cookie("refresh_token"); err == nil {
+		currentHash = auth.HashToken(cookie.Value)
+	}
+
+	isCurrent, err := h.authService.RevokeSession(r.Context(), claims.UserID, sessionID, currentHash)
+	if err != nil {
+		h.log.Error("RevokeSession failed", "error", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if isCurrent {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "refresh_token",
+			Value:    "",
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   h.cookieSecure,
+			SameSite: http.SameSiteStrictMode,
+			MaxAge:   -1,
+		})
 	}
 
 	w.WriteHeader(http.StatusNoContent)

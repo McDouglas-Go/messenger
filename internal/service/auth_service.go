@@ -3,10 +3,10 @@ package service
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode"
@@ -48,15 +48,18 @@ type authService struct {
 	sessionRepo repository.SessionRepository
 	jwtManager  *auth.JWTManager
 	refreshTTL  time.Duration
+	logger      *slog.Logger
 }
 
 type AuthSerice interface {
 	Register(ctx context.Context, input RegisterInput) (*model.User, error)
 	Login(ctx context.Context, input LoginInput, userAgent, ip string) (string, string, error)
-	RefreshToken(ctx context.Context, refreshToken string) (string, string, error)
+	RefreshToken(ctx context.Context, refreshToken, userAgent string) (string, string, error)
 	Logout(ctx context.Context, refreshToken string) error
 	UpdateProfile(ctx context.Context, userID string, input UpdateProfileInput) (*model.User, error)
 	DeleteProfile(ctx context.Context, userID string) error
+	ListSessions(ctx context.Context, userID string) ([]*model.Session, error)
+	RevokeSession(ctx context.Context, userID, sessionID, currentTokenHash string) (bool, error)
 }
 
 func NewAuthService(
@@ -64,12 +67,14 @@ func NewAuthService(
 	sessionRepo repository.SessionRepository,
 	jwtManager *auth.JWTManager,
 	refreshTTL time.Duration,
+	logger *slog.Logger,
 ) AuthSerice {
 	return &authService{
 		userRepo:    userRepo,
 		sessionRepo: sessionRepo,
 		jwtManager:  jwtManager,
 		refreshTTL:  refreshTTL,
+		logger:      logger,
 	}
 }
 
@@ -164,11 +169,6 @@ func GenerateRefreshToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-func hashToken(token string) string {
-	hash := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(hash[:])
-}
-
 func (s *authService) Login(ctx context.Context, input LoginInput, userAgent, ip string) (string, string, error) {
 	user, err := s.userRepo.GetByEmail(ctx, input.Email)
 	if err != nil {
@@ -191,7 +191,7 @@ func (s *authService) Login(ctx context.Context, input LoginInput, userAgent, ip
 		return "", "", err
 	}
 
-	hash := hashToken(refreshToken)
+	hash := auth.HashToken(refreshToken)
 
 	session := &model.Session{
 		UserID:           user.ID,
@@ -207,8 +207,8 @@ func (s *authService) Login(ctx context.Context, input LoginInput, userAgent, ip
 	return accessToken, refreshToken, nil
 }
 
-func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (string, string, error) {
-	hash := hashToken(refreshToken)
+func (s *authService) RefreshToken(ctx context.Context, refreshToken, userAgent string) (string, string, error) {
+	hash := auth.HashToken(refreshToken)
 
 	session, err := s.sessionRepo.GetByRefreshTokenHash(ctx, hash)
 	if err != nil {
@@ -217,6 +217,12 @@ func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (st
 	if session == nil {
 		return "", "", errors.New("invalid refresh token")
 	}
+	if session.UserAgent != "" && session.UserAgent != userAgent {
+		s.logger.Warn("user agent mismatch in refresh", "session_id", session.ID, "expected", session.UserAgent, "got", userAgent)
+		s.sessionRepo.Delete(ctx, session.ID)
+		return "", "", errors.New("session possibly compromised, please login again")
+	}
+
 	user, err := s.userRepo.GetByID(ctx, session.UserID)
 	if err != nil {
 		return "", "", fmt.Errorf("get user: %w", err)
@@ -239,7 +245,7 @@ func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (st
 		return "", "", err
 	}
 
-	newHash := hashToken(newRefreshToken)
+	newHash := auth.HashToken(newRefreshToken)
 	newSession := &model.Session{
 		UserID:           user.ID,
 		RefreshTokenHash: newHash,
@@ -255,7 +261,7 @@ func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (st
 }
 
 func (s *authService) Logout(ctx context.Context, refreshToken string) error {
-	hash := hashToken(refreshToken)
+	hash := auth.HashToken(refreshToken)
 	session, err := s.sessionRepo.GetByRefreshTokenHash(ctx, hash)
 	if err != nil {
 		return fmt.Errorf("get session: %w", err)
@@ -310,4 +316,30 @@ func (s *authService) DeleteProfile(ctx context.Context, userID string) error {
 	}
 
 	return s.userRepo.Delete(ctx, userID)
+}
+
+func (s *authService) ListSessions(ctx context.Context, userID string) ([]*model.Session, error) {
+	return s.sessionRepo.GetByUserID(ctx, userID)
+}
+
+func (s *authService) RevokeSession(ctx context.Context, userID, sessionID, currentTokenHash string) (bool, error) {
+	session, err := s.sessionRepo.GetByID(ctx, sessionID)
+	if err != nil {
+		return false, fmt.Errorf("get session: %w", err)
+	}
+	if session == nil {
+		return false, errors.New("session not found")
+	}
+	if session.UserID != userID {
+		return false, errors.New("you can only revoke your own sessions")
+	}
+	if err := s.sessionRepo.Delete(ctx, sessionID); err != nil {
+
+	}
+	if err := s.sessionRepo.Delete(ctx, sessionID); err != nil {
+		return false, err
+	}
+
+	isCurrent := (currentTokenHash != "" && session.RefreshTokenHash == currentTokenHash)
+	return isCurrent, nil
 }
