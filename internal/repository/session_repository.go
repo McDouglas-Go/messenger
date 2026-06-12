@@ -29,15 +29,14 @@ func NewSessionRepository(pool *pgxpool.Pool) SessionRepository {
 
 func (r *pgSessionRepository) Create(ctx context.Context, session *model.Session) error {
 	query := `
-        INSERT INTO sessions (user_id, refresh_token_hash, user_agent, ip_address, expires_at)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO sessions (user_id, refresh_token_hash, user_agent, expires_at)
+        VALUES ($1, $2, $3, $4)
         RETURNING id, created_at`
 
 	args := []interface{}{
 		session.UserID,
 		session.RefreshTokenHash,
 		session.UserAgent,
-		session.IPAddress,
 		session.ExpiresAt,
 	}
 	err := r.pool.QueryRow(ctx, query, args...).Scan(&session.ID, &session.CreatedAt)
@@ -50,7 +49,7 @@ func (r *pgSessionRepository) Create(ctx context.Context, session *model.Session
 
 func (r *pgSessionRepository) GetByRefreshTokenHash(ctx context.Context, hash string) (*model.Session, error) {
 	query := `
-        SELECT id, user_id, refresh_token_hash, user_agent, ip_address, expires_at, created_at
+        SELECT id, user_id, refresh_token_hash, user_agent, expires_at, created_at
         FROM sessions
         WHERE refresh_token_hash = $1`
 
@@ -60,7 +59,6 @@ func (r *pgSessionRepository) GetByRefreshTokenHash(ctx context.Context, hash st
 		&s.UserID,
 		&s.RefreshTokenHash,
 		&s.UserAgent,
-		&s.IPAddress,
 		&s.ExpiresAt,
 		&s.CreatedAt,
 	)
@@ -79,7 +77,7 @@ func (r *pgSessionRepository) GetByRefreshTokenHash(ctx context.Context, hash st
 
 func (r *pgSessionRepository) GetByID(ctx context.Context, id string) (*model.Session, error) {
 	query := `
-        SELECT id, user_id, refresh_token_hash, user_agent, ip_address, expires_at, created_at
+        SELECT id, user_id, refresh_token_hash, user_agent, expires_at, created_at
         FROM sessions
         WHERE id = $1`
 
@@ -89,7 +87,6 @@ func (r *pgSessionRepository) GetByID(ctx context.Context, id string) (*model.Se
 		&s.UserID,
 		&s.RefreshTokenHash,
 		&s.UserAgent,
-		&s.IPAddress,
 		&s.ExpiresAt,
 		&s.CreatedAt,
 	)
@@ -105,7 +102,7 @@ func (r *pgSessionRepository) GetByID(ctx context.Context, id string) (*model.Se
 
 func (r *pgSessionRepository) GetByUserID(ctx context.Context, userID string) ([]*model.Session, error) {
 	query := `
-        SELECT id, user_id, refresh_token_hash, user_agent, ip_address, expires_at, created_at
+        SELECT id, user_id, refresh_token_hash, user_agent, expires_at, created_at
         FROM sessions
         WHERE user_id = $1
         ORDER BY created_at DESC`
@@ -124,7 +121,6 @@ func (r *pgSessionRepository) GetByUserID(ctx context.Context, userID string) ([
 			&s.UserID,
 			&s.RefreshTokenHash,
 			&s.UserAgent,
-			&s.IPAddress,
 			&s.ExpiresAt,
 			&s.CreatedAt,
 		)

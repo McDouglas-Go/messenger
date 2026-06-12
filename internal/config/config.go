@@ -16,6 +16,7 @@ type Config struct {
 	UploadDir       string
 	BaseURL         string
 	RefreshTokenTTL time.Duration
+	StaticDir       string
 }
 
 func Load() (*Config, error) {
@@ -36,6 +37,7 @@ func Load() (*Config, error) {
 		UploadDir:       getEnv("UPLOAD_DIR", "./uploads"),
 		BaseURL:         getEnv("BASE_URL", "http://localhost:8080"),
 		RefreshTokenTTL: refreshTTL,
+		StaticDir:       getEnv("STATIC_DIR", "./web"),
 	}
 
 	return cfg, nil

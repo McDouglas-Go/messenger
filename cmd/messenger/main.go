@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -100,6 +101,11 @@ func main() {
 
 	api.HandleFunc("/media", mediaHandler.Upload).Methods("POST")
 	api.HandleFunc("/media/{media_id}", mediaHandler.Download).Methods("GET")
+
+	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir(cfg.StaticDir))))
+	r.PathPrefix("/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join(cfg.StaticDir, "index.html"))
+	})
 	srv := &http.Server{
 		Addr:         ":" + cfg.ServerPort,
 		Handler:      r,

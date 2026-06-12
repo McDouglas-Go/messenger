@@ -129,15 +129,9 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	accessToken, refreshToken, err := h.authService.Login(r.Context(), input, r.UserAgent(), r.RemoteAddr)
+	accessToken, refreshToken, err := h.authService.Login(r.Context(), input, r.UserAgent())
 	if err != nil {
-		status := http.StatusInternalServerError
-		msg := "Internal server error"
-		if err.Error() == "invalid email or password" {
-			status = http.StatusUnauthorized
-			msg = err.Error()
-		}
-		http.Error(w, msg, status)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	setRefreshTokenCookie(w, refreshToken, h.refreshTTL, h.cookieSecure)
@@ -368,7 +362,6 @@ func (h *AuthHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
 	type sessionResp struct {
 		ID        string `json:"id"`
 		UserAgent string `json:"user_agent"`
-		IPAddress string `json:"ip_address"`
 		CreatedAt string `json:"created_at"`
 		ExpiresAt string `json:"expires_at"`
 		IsCurrent bool   `json:"is_current"`
@@ -378,7 +371,6 @@ func (h *AuthHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
 		resp = append(resp, sessionResp{
 			ID:        s.UserID,
 			UserAgent: s.UserAgent,
-			IPAddress: s.IPAddress,
 			CreatedAt: s.CreatedAt.Format(time.RFC3339),
 			ExpiresAt: s.ExpiresAt.Format(time.RFC3339),
 			IsCurrent: s.ID == currentSessionID,

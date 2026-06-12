@@ -53,7 +53,7 @@ type authService struct {
 
 type AuthSerice interface {
 	Register(ctx context.Context, input RegisterInput) (*model.User, error)
-	Login(ctx context.Context, input LoginInput, userAgent, ip string) (string, string, error)
+	Login(ctx context.Context, input LoginInput, userAgent string) (string, string, error)
 	RefreshToken(ctx context.Context, refreshToken, userAgent string) (string, string, error)
 	Logout(ctx context.Context, refreshToken string) error
 	UpdateProfile(ctx context.Context, userID string, input UpdateProfileInput) (*model.User, error)
@@ -169,7 +169,7 @@ func GenerateRefreshToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-func (s *authService) Login(ctx context.Context, input LoginInput, userAgent, ip string) (string, string, error) {
+func (s *authService) Login(ctx context.Context, input LoginInput, userAgent string) (string, string, error) {
 	user, err := s.userRepo.GetByEmail(ctx, input.Email)
 	if err != nil {
 		return "", "", fmt.Errorf("get user by email: %w", err)
@@ -197,7 +197,6 @@ func (s *authService) Login(ctx context.Context, input LoginInput, userAgent, ip
 		UserID:           user.ID,
 		RefreshTokenHash: hash,
 		UserAgent:        userAgent,
-		IPAddress:        ip,
 		ExpiresAt:        time.Now().Add(s.refreshTTL),
 	}
 	if err := s.sessionRepo.Create(ctx, session); err != nil {
@@ -250,7 +249,6 @@ func (s *authService) RefreshToken(ctx context.Context, refreshToken, userAgent 
 		UserID:           user.ID,
 		RefreshTokenHash: newHash,
 		UserAgent:        session.UserAgent,
-		IPAddress:        session.IPAddress,
 		ExpiresAt:        time.Now().Add(s.refreshTTL),
 	}
 	if err := s.sessionRepo.Create(ctx, newSession); err != nil {
