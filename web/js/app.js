@@ -15,6 +15,7 @@ function logout() {
 
 function renderChats(container) {
     if (!requireAuth()) return;
+    container.classList.remove('chat-open');
     if (Chats.chats.length === 0) {
         Chats.init();
     }

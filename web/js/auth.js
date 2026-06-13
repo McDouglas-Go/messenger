@@ -20,7 +20,7 @@ const Auth = {
         const password = document.getElementById('login-password').value;
 
         try {
-            const data = await Api.post('/login', { email, password }, true);
+            const data = await Api.login(email, password);
             Api.setToken(data.access_token);
             window.location.hash = '#chats';
         } catch (err) {

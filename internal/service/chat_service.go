@@ -10,10 +10,21 @@ import (
 	"github.com/McDouglas-Go/messenger/internal/repository"
 )
 
+type ChatWithInfo struct {
+	Chat      *model.Chat `json:"chat"`
+	OtherUser *UserInfo   `json:"other_user,omitempty"`
+}
+
+type UserInfo struct {
+	ID          string `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
+}
+
 type ChatService interface {
 	CreatePrivate(ctx context.Context, userID1, userID2 string) (*model.Chat, error)
 	CreateGroup(ctx context.Context, name, creatorID string, memberIDs []string) (*model.Chat, error)
-	GetUserChats(ctx context.Context, userID string) ([]*model.Chat, error)
+	GetUserChats(ctx context.Context, userID string) ([]*ChatWithInfo, error)
 	UpdateChat(ctx context.Context, userID, chatID string, name *string) (*model.Chat, error)
 	AddMembers(ctx context.Context, userID, chatID string, memberIDs []string) error
 	RemoveMember(ctx context.Context, userID, chatID, targetUserID string) error
@@ -99,12 +110,35 @@ func (s *chatService) CreateGroup(ctx context.Context, name, creatorID string, m
 	return chat, nil
 }
 
-func (s *chatService) GetUserChats(ctx context.Context, userID string) ([]*model.Chat, error) {
-	if _, err := s.getExistingUser(ctx, userID); err != nil {
+func (s *chatService) GetUserChats(ctx context.Context, userID string) ([]*ChatWithInfo, error) {
+	chats, err := s.chatRepo.GetUserchats(ctx, userID)
+	if err != nil {
 		return nil, err
 	}
-
-	return s.chatRepo.GetUserchats(ctx, userID)
+	var result []*ChatWithInfo
+	for _, chat := range chats {
+		cwi := &ChatWithInfo{Chat: chat}
+		if chat.Type == model.ChatTypePrivate {
+			members, err := s.chatRepo.GetChatMembers(ctx, chat.ID)
+			if err == nil {
+				for _, m := range members {
+					if m.UserID != userID {
+						otherUser, err := s.userRepo.GetByID(ctx, m.UserID)
+						if err == nil && otherUser != nil {
+							cwi.OtherUser = &UserInfo{
+								ID:          otherUser.ID,
+								Username:    otherUser.Username,
+								DisplayName: otherUser.DisplayName,
+							}
+						}
+						break
+					}
+				}
+			}
+		}
+		result = append(result, cwi)
+	}
+	return result, nil
 }
 
 func (s *chatService) getExistingUser(ctx context.Context, userID string) (*model.User, error) {

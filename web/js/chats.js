@@ -1,6 +1,6 @@
 const Chats = {
     chats: [],
-    currentChatID: null,
+    currentChatId: null,
     ws: null,
 
     async init() {
@@ -25,13 +25,17 @@ const Chats = {
             const li = document.createElement('li');
             li.dataset.chatId = chat.id;
             li.className = 'chat-item';
-            if (chat.id === this.currentChatID) {
+            if (chat.id === this.currentChatId) {
                 li.classList.add('active');
             }
 
             let title = '';
             if(chat.type === 'private') {
-                title = `Private Chat (${chat.id.slice(0, 8)})`;
+                if (chat.other_user){
+                    title = chat.other_user.display_name || chat.other_user.username;
+                } else {
+                    title = 'Unknown';
+                }
             } else {
                 title = chat.name || 'Group Chat';
             }
@@ -52,8 +56,8 @@ const Chats = {
     },
 
     async selectChat(chatId) {
-        if (this.currentChatID === chatId) return;
-        this.currentChatID = chatId;
+        if (this.currentChatId === chatId) return;
+        this.currentChatId = chatId;
         this.renderChatList();
 
         const main = document.getElementById('main');
@@ -225,8 +229,234 @@ const Chats = {
         Modals.show('group-chat-modal');
     },
 
+    async selectChat(chatId) {
+        if (this.currentChatId === chatId) return;
+        this.currentChatId = chatId;
+        this.renderChatList(); 
+        await this.loadMessages(chatId);
+    },
+
+    async loadMessages(chatId) {
+        const main = document.getElementById('main');
+        main.classList.remove('chat-open');
+        main.innerHTML = '<div class="loading">Loading messages…</div>';
+
+        try {
+            const messages = await Api.getMessages(chatId);
+            messages.forEach(m => {
+                try {
+                    m.text = atob(m.encrypted_content);
+                } catch (e) {
+                    m.text = '[encrypted]';
+                }
+            });
+            this.renderMessages(messages);
+        } catch (err) {
+            main.innerHTML = `<div class="error">Failed to load messages: ${err.message}</div>`;
+        }
+    },
+
+    renderMessages(messages) {
+        const main = document.getElementById('main');
+        main.classList.add('chat-open');
+        main.innerHTML = `
+            <div id="messages-container">
+                <div id="messages-list"></div>
+                <div id="typing-indicator" class="typing-indicator"></div>
+                <form id="message-form">
+                    <input type="text" id="message-input" placeholder="Write a message…" autocomplete="off">
+                    <button type="submit">Send</button>
+                </form>
+            </div>
+        `;
+
+        const list = document.getElementById('messages-list');
+        messages.forEach(msg => this.appendMessage(msg, list));
+
+        document.getElementById('message-form').onsubmit = (e) => {
+            e.preventDefault();
+            this.sendMessage();
+        }
+
+        const msgInput = document.getElementById('message-input');
+        let typingTimer;
+        msgInput.addEventListener('input', () => {
+            if (!Chats.ws || Chats.ws.readyState !== WebSocket.OPEN) return;
+            Chats.ws.send(JSON.stringify({
+                event: 'typing',
+                data: { chat_id: Chats.currentChatId }
+            }));
+            clearTimeout(typingTimer);
+            typingTimer = setTimeout(() => {
+                Chats.ws.send(JSON.stringify({
+                    event: 'stop_typing',
+                    data: { chat_id: Chats.currentChatId }
+                }));
+            }, 2000);
+        });
+        msgInput.addEventListener('keydown', () => {
+            clearTimeout(typingTimer);
+            if (Chats.ws && Chats.ws.readyState === WebSocket.OPEN) {
+                Chats.ws.send(JSON.stringify({
+                    event: 'stop_typing',
+                    data: { chat_id: Chats.currentChatId }
+                }));
+            }
+        });
+
+        list.scrollTop = list.scrollHeight;
+    },
+
+    appendMessage(msg, container = null) {
+        if (!container) container = document.getElementById('messages-list');
+        if (!container) return;
+
+        const div = document.createElement('div');
+        const isOwn = (Api.userId && msg.sender_id === Api.userId);
+        div.className = 'message ' + (isOwn ? 'own' : '');
+        div.setAttribute('data-message-id', msg.id)
+        div.innerHTML = `
+            <div class="message-content">${escapeHtml(msg.text || '')}</div>
+            <div class="message-time">${new Date(msg.sent_at).toLocaleTimeString()}</div>
+        `;
+        container.appendChild(div);
+    },
+
+    async sendMessage() {
+        const input = document.getElementById('message-input');
+        const text = input.value.trim();
+        if (!text || !this.currentChatId) return;
+
+        const encoded = btoa(unescape(encodeURIComponent(text)));
+        const nonce = btoa(Math.random().toString()).slice(0,12);
+
+        try {
+            await Api.sendMessage(this.currentChatId, encoded, nonce, 'text');
+            input.value = '';
+            await this.loadMessages(this.currentChatId);
+        } catch (err) {
+            alert('Failed to send message: ' + err.message);
+        }
+    },
+
     connectWebSocket() {
-        //todo
+        if (!Api.authToken) return;
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'; 
+        const wsUrl = `${protocol}//${window.location.host}/ws`;
+        const ws = new WebSocket(wsUrl);
+        ws.onopen = () => {
+            console.log('WebSocket connected')
+            ws.send(JSON.stringify({
+                event: 'auth',
+                data: { token: Api.authToken }
+            }));
+        };
+        ws.onmessage = (event) => {
+            console.log('WS raw:', event.data);
+            try {
+                const data = JSON.parse(event.data);
+                console.log('WS parsed:', data);
+                if (data.event === 'auth_ok') return;
+                this.handleWsEvent(data);
+            } catch (e) {
+                console.error('Invalid JSON in WebSocket message', e);
+            }
+        };
+        ws.onclose = (event) => {
+             console.log('WebSocket disconnected, reconnecting in 5s...', event.reason);
+             setTimeout(() => this.connectWebSocket(), 5000);
+        };
+        ws.onerror = (event) => {
+            console.error('WebSocket error', event);
+            ws.close();
+        };
+        this.ws = ws;
+    },
+
+    handleWsEvent(data) {
+        const { event, data: payload } = data;
+        try {
+            switch (event) {
+                case 'new_message':
+                    this.onNewMessage(payload);
+                    break;
+                case 'message_updated':
+                    this.onMessageUpdated(payload);
+                    break;
+                case 'message_deleted':
+                    this.onMessageDeleted(payload);
+                    break;
+                case 'typing':
+                    this.onTyping(payload);
+                    break;
+                case 'stop_typing':
+                    this.onStopTyping(payload);
+                    break;
+            }
+        } catch (e) {
+            console.error('Error processing event', event, e);
+        }
+    },
+
+    onNewMessage(msg) {
+        if (this.currentChatId === msg.chat_id) {
+            try {
+                msg.text = atob(msg.encrypted_content);
+            } catch (e) {
+                msg.text = '[encrypted]';
+            }
+            this.appendMessage(msg);
+            const list = document.getElementById('messages-list');
+            if (list) list.scrollTop = list.scrollHeight;
+        }
+        this.loadMessages(this.currentChatId);
+        this.loadChats();
+    },
+
+    onMessageUpdated(updatedMsg) {
+        if (this.currentChatId === msg.chat_id) {
+            const existing = document.querySelector(`.message[data-message-id="${updatedMsg.id}"]`);
+            if (existing) {
+                try {
+                    updatedMsg.text = atob(updatedMsg.encrypted_content);
+                } catch (e) {
+                    updatedMsg.text = '[encrypted]';
+                }
+                existing.querySelector('.message-content').textContent = updatedMsg.text;
+                existing.querySelector('.message-time').textContent = 
+                    new Date(updatedMsg.edited_at || updatedMsg.sent_at).toLocaleTimeString();
+            } else {
+                this.loadMessages(this.currentChatId);
+            }
+        }
+        this.loadChats();
+    },
+
+    onMessageDeleted(payload) {
+        if (this.currentChatId === msg.chat_id) {
+            const msgEl = document.querySelector(`.message[data-message-id="${payload.message_id}"]`);
+            if (msgEl) msgEl.remove();
+        }
+        this.loadChats();
+    },
+
+    onTyping(payload) {
+        if (this.currentChatId !== payload.chat_id) return;
+        const typingEl = document.getElementById('typing-indicator');
+        if (typingEl) {
+            typingEl.textContent = `${payload.user_id.slice(0,8)} is typing...`;
+            typingEl.style.display = 'block';
+            clearTimeout(this._typingTimeout);
+            this._typingTimeout = setTimeout(() => {
+                if (typingEl) typingEl.style.display = 'none';
+            }, 3000);
+        }
+    },
+
+    onStopTyping(payload) {
+        if (this.currentChatId !== payload.chat_id) return;
+        const typingEl = document.getElementById('typing-indicator');
+        if (typingEl) typingEl.style.display = 'none';
     }
 };
 

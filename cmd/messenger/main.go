@@ -65,7 +65,7 @@ func main() {
 	chatHandler := handlers.NewChatHandler(chatServise, logger)
 	messageHandler := handlers.Newmessagehandler(messageService, logger)
 	mediaHandler := handlers.NewMediahandler(mediaService, logger)
-	wsHandler := handlers.NewWSHandler(hub, logger)
+	wsHandler := handlers.NewWSHandler(hub, jwtManager, logger)
 
 	r := mux.NewRouter()
 
@@ -73,10 +73,10 @@ func main() {
 	r.HandleFunc("/login", authHandler.Login).Methods("POST")
 	r.HandleFunc("/refresh", authHandler.RefreshToken).Methods("POST")
 	r.HandleFunc("/logout", authHandler.Logout).Methods("POST")
+	r.HandleFunc("/ws", wsHandler.ServeWS)
 
 	api := r.NewRoute().Subrouter()
 	api.Use(middleware.AuthMiddleware(jwtManager))
-	api.HandleFunc("/ws", wsHandler.ServeWS)
 
 	api.HandleFunc("/me", authHandler.Me).Methods("GET")
 	api.HandleFunc("/me", authHandler.UpdateProfile).Methods("PUT")

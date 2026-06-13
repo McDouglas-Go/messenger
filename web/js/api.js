@@ -1,8 +1,27 @@
+function parseJwt(token) {
+    try {
+        const base64Url = token.split('.')[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(atob(base64).split('').map(c => 
+            '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
+        ).join(''));
+        return JSON.parse(jsonPayload);
+    } catch (e) {
+
+    }
+}
+
 const Api = {
     authToken: null,
+    userId: null,
 
     setToken(token) {
         this.authToken = token;
+        const payload = parseJwt(token);
+        if (payload) {
+            this.userId = payload.user_id;
+            this.currentUsername = payload.username;
+        }
     },
 
     clearToken() {
@@ -50,6 +69,12 @@ const Api = {
         } catch (e) {
             return false;
         }
+    },
+
+    async login(email, password) {
+        const data = await this.post('/login', { email, password }, true);
+        this.setToken(data.access_token);
+        return data;
     },
 
     get(url) { 

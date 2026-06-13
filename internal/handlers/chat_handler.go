@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/McDouglas-Go/messenger/internal/middleware"
 	"github.com/McDouglas-Go/messenger/internal/model"
@@ -130,16 +131,34 @@ func (h *ChatHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 func (h *ChatHandler) GetUserChats(w http.ResponseWriter, r *http.Request) {
 	claims, _ := middleware.GetClaimsFromContext(r.Context())
 
-	chats, err := h.chatService.GetUserChats(r.Context(), claims.UserID)
+	chatsWithInfo, err := h.chatService.GetUserChats(r.Context(), claims.UserID)
 	if err != nil {
 		h.log.Error("GetUserChats error", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	type chatInfo struct {
+		ID        string            `json:"id"`
+		Type      string            `json:"type"`
+		Name      *string           `json:"name,omitempty"`
+		CreatedBy string            `json:"created_by"`
+		CreatedAt string            `json:"created_at"`
+		UpdatedAt string            `json:"updated_at"`
+		OtherUser *service.UserInfo `json:"other_user,omitempty"`
+	}
 
-	respList := make([]chatResponse, 0, len(chats))
-	for _, chat := range chats {
-		respList = append(respList, chatToResponse(chat))
+	respList := make([]chatInfo, 0, len(chatsWithInfo))
+	for _, cwi := range chatsWithInfo {
+		ci := chatInfo{
+			ID:        cwi.Chat.ID,
+			Type:      string(cwi.Chat.Type),
+			Name:      cwi.Chat.Name,
+			CreatedBy: cwi.Chat.CreatedBy,
+			CreatedAt: cwi.Chat.CreatedAt.Format(time.RFC3339),
+			UpdatedAt: cwi.Chat.UpdatedAt.Format(time.RFC3339),
+			OtherUser: cwi.OtherUser,
+		}
+		respList = append(respList, ci)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
