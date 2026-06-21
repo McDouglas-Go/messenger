@@ -168,6 +168,21 @@ func (h *ChatHandler) GetUserChats(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *ChatHandler) GetChatWithMembers(w http.ResponseWriter, r *http.Request) {
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
+	chatID := mux.Vars(r)["chat_id"]
+	result, err := h.chatService.GetChatWithMembers(r.Context(), chatID, claims.UserID)
+	if err != nil {
+		h.log.Error("GetChatWithParticipants failed", "error", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(result)
+}
+
 func (h *ChatHandler) UpdateChat(w http.ResponseWriter, r *http.Request) {
 	claims, _ := middleware.GetClaimsFromContext(r.Context())
 

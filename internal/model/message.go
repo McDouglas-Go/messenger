@@ -12,13 +12,13 @@ const (
 )
 
 type EncryptedMessage struct {
-	ID               string
-	ChatID           string
-	SenderID         string
-	EncryptedContent []byte
-	Nonce            []byte
-	EncryptionKeyID  *string
-	ContentType      ContentType
-	SentAt           time.Time
-	EditedAt         *time.Time
+	ID               string      `json:"id"`
+	ChatID           string      `json:"chat_id"`
+	SenderID         string      `json:"sender_id"`
+	EncryptedContent []byte      `json:"encrypted_content"`
+	Nonce            []byte      `json:"nonce"`
+	EncryptionKeyID  *string     `json:"encryption_key_id,omitempty"`
+	ContentType      ContentType `json:"content_type"`
+	SentAt           time.Time   `json:"sent_at"`
+	EditedAt         *time.Time  `json:"edited_at,omitempty"`
 }

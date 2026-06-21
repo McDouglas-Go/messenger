@@ -7,6 +7,9 @@ function requireAuth() {
 }
 
 function logout() {
+    if (Chats.ws) {
+        Chats.ws.close(1000, 'logout');  
+    }
     Api.post('/logout').then(() => {
         Api.clearToken();
         window.location.hash = '#login';
@@ -25,7 +28,34 @@ function renderChats(container) {
     placeholder.textContent = 'Select a chat to start messaging';
     container.appendChild(placeholder);
 
-    document.getElementById('new-chat-btn').onclick = () => Chats.showCreateChatMenu();
+    const createChatBtn = document.getElementById('create-chat-btn');
+    if (createChatBtn) {
+        createChatBtn.addEventListener('click', () => {
+            if (!requireAuth()) return;
+            Chats.showCreateChatMenu();
+        });
+    }
+
+    const chatsBtn = document.getElementById('chats-btn');
+    if (chatsBtn) {
+        chatsBtn.addEventListener('click', () => {
+            window.location.hash = '#chats';
+            Chats.currentChatId = null;
+            Chats.currentChatDetail = null;
+            const main = document.getElementById('main');
+            if (main) {
+                main.classList.remove('chat-open');
+                main.innerHTML = '<div class="chat-placeholder">Select a chat to start messaging</div>';
+            }
+            document.querySelectorAll('#chat-list .active').forEach(li => li.classList.remove('active'));
+        });
+    }
+    const profileBtn = document.getElementById('profile-btn');
+    if (profileBtn) {
+        profileBtn.addEventListener('click', () => {
+            window.location.hash = '#profile';
+        });
+    }
 }
 
 function renderSettings(container) {
@@ -33,11 +63,17 @@ function renderSettings(container) {
     container.innerHTML = '<h2>Settings</h2>';
 }
 
+function renderProfile(container) {
+    if (!requireAuth()) return;
+    Profile.render(container); 
+}
+
 
 Router.add('login', Auth.renderLogin.bind(Auth));
 Router.add('register', Auth.renderRegister.bind(Auth));
 Router.add('chats', renderChats);
 Router.add('settings', renderSettings);
+Router.add('profile', renderProfile);
 
 (async function () {
     if (!Api.authToken) {

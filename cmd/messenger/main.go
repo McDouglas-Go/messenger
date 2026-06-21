@@ -90,6 +90,7 @@ func main() {
 	api.HandleFunc("/chats/private", chatHandler.CreatePrivate).Methods("POST")
 	api.HandleFunc("/chats/group", chatHandler.CreateGroup).Methods("POST")
 	api.HandleFunc("/chats", chatHandler.GetUserChats).Methods("GET")
+	api.HandleFunc("/chats/{chat_id}", chatHandler.GetChatWithMembers).Methods("GET")
 	api.HandleFunc("/chats/{chat_id}", chatHandler.UpdateChat).Methods("PUT")
 	api.HandleFunc("/chats/{chat_id}/members", chatHandler.AddMembers).Methods("POST")
 	api.HandleFunc("/chats/{chat_id}/members", chatHandler.RemoveMember).Methods("DELETE")

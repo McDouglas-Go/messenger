@@ -66,9 +66,7 @@ func (s *messageService) Send(ctx context.Context, senderID string, msg *model.E
 		"data":  msg,
 	}
 	for _, member := range members {
-		if member.UserID != senderID {
-			s.hub.SendToUser(member.UserID, event)
-		}
+		s.hub.SendToUser(member.UserID, event)
 	}
 
 	return nil
@@ -149,10 +147,6 @@ func (s *messageService) DeleteMessage(ctx context.Context, userID, chatID, mess
 	}
 	if msg.ChatID != chatID {
 		return errors.New("message does not belong to this chat")
-	}
-
-	if msg.SenderID == userID {
-		return s.msgRepo.Delete(ctx, messageID)
 	}
 
 	user, err := s.chatRepo.GetMember(ctx, chatID, userID)

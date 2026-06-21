@@ -10,10 +10,10 @@ const (
 )
 
 type Chat struct {
-	ID        string
-	Type      ChatType
-	Name      *string
-	CreatedBy string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID        string    `json:"id"`
+	Type      ChatType  `json:"type"`
+	Name      *string   `json:"name"`
+	CreatedBy string    `json:"created_by"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }

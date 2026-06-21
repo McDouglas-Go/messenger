@@ -2,18 +2,19 @@ function parseJwt(token) {
     try {
         const base64Url = token.split('.')[1];
         const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-        const jsonPayload = decodeURIComponent(atob(base64).split('').map(c => 
+        const jsonPayload = decodeURIComponent(atob(base64).split('').map(c =>
             '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
         ).join(''));
         return JSON.parse(jsonPayload);
     } catch (e) {
-
+        return null;
     }
 }
 
 const Api = {
     authToken: null,
     userId: null,
+    currentUsername: null,
 
     setToken(token) {
         this.authToken = token;
@@ -26,6 +27,8 @@ const Api = {
 
     clearToken() {
         this.authToken = null;
+        this.userId = null;
+        this.currentUsername = null;
     },
 
     async request(method, url, body = null, isPublic = false) {
@@ -86,17 +89,18 @@ const Api = {
     put(url, body) { 
         return this.request('PUT', url, body); 
     },
-    del(url) { 
-        return this.request('DELETE', url); 
+    del(url, body = null) { 
+        return this.request('DELETE', url, body); 
     },
-    getChats() {
-        return this.get('/chats');
+
+    getChats() { 
+        return this.get('/chats'); 
     },
-    createPrivateChat(userId) {
-        return this.post('/chats/private', { user_id: userId });
+    createPrivateChat(userId) { 
+        return this.post('/chats/private', { user_id: userId }); 
     },
-    createGroupChat(name, memberIds) {
-        return this.post('/chats/group', { name, member_ids: memberIds });
+    createGroupChat(name, memberIds) { 
+        return this.post('/chats/group', { name, member_ids: memberIds }); 
     },
     getMessages(chatId, limit = 50, offset = 0) {
         return this.get(`/chats/${chatId}/messages?limit=${limit}&offset=${offset}`);
@@ -109,7 +113,7 @@ const Api = {
             encryption_key_id: encryptionKeyId
         });
     },
-    editMessage(chatID, messageID, encryptedContent, nonce, contentType, encryptionKeyId = null) {
+    editMessage(chatId, messageId, encryptedContent, nonce, contentType, encryptionKeyId = null) {
         return this.put(`/chats/${chatId}/messages/${messageId}`, {
             encrypted_content: encryptedContent,
             nonce: nonce,
@@ -117,7 +121,7 @@ const Api = {
             encryption_key_id: encryptionKeyId
         });
     },
-    deleteMessage(chatID, messageID) {
+    deleteMessage(chatId, messageId) {
         return this.del(`/chats/${chatId}/messages/${messageId}`);
     }
 };

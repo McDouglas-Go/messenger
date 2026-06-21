@@ -21,10 +21,25 @@ type UserInfo struct {
 	DisplayName string `json:"display_name"`
 }
 
+type ChatDetail struct {
+	Chat        *model.Chat   `json:"chat"`
+	Members     []*MemberInfo `json:"members"`
+	CurrentRole string        `json:"current_role"`
+}
+
+type MemberInfo struct {
+	UserID      string `json:"user_id"`
+	UserName    string `json:"username"`
+	DisplayName string `json:"display_name"`
+	Role        string `json:"role"`
+	JoinetAt    string `json:"joined_at"`
+}
+
 type ChatService interface {
 	CreatePrivate(ctx context.Context, userID1, userID2 string) (*model.Chat, error)
 	CreateGroup(ctx context.Context, name, creatorID string, memberIDs []string) (*model.Chat, error)
 	GetUserChats(ctx context.Context, userID string) ([]*ChatWithInfo, error)
+	GetChatWithMembers(ctx context.Context, chatID, userID string) (*ChatDetail, error)
 	UpdateChat(ctx context.Context, userID, chatID string, name *string) (*model.Chat, error)
 	AddMembers(ctx context.Context, userID, chatID string, memberIDs []string) error
 	RemoveMember(ctx context.Context, userID, chatID, targetUserID string) error
@@ -139,6 +154,47 @@ func (s *chatService) GetUserChats(ctx context.Context, userID string) ([]*ChatW
 		result = append(result, cwi)
 	}
 	return result, nil
+}
+
+func (s *chatService) GetChatWithMembers(ctx context.Context, chatID, userID string) (*ChatDetail, error) {
+	chat, err := s.chatRepo.GetByID(ctx, chatID)
+	if err != nil {
+		return nil, fmt.Errorf("get chat: %w", err)
+	}
+	if chat == nil {
+		return nil, errors.New("chat not found")
+	}
+	members, err := s.chatRepo.GetChatMembers(ctx, chatID)
+	if err != nil {
+		return nil, fmt.Errorf("get members: %w", err)
+	}
+	memberInfos := make([]*MemberInfo, 0, len(members))
+	currentRole := ""
+
+	for _, m := range members {
+		user, err := s.userRepo.GetByID(ctx, m.UserID)
+		if err != nil {
+			return nil, fmt.Errorf("get user %s: %w", m.UserID, err)
+		}
+		if user == nil {
+			continue
+		}
+		if m.UserID == userID {
+			currentRole = string(m.Role)
+		}
+		memberInfos = append(memberInfos, &MemberInfo{
+			UserID:      m.UserID,
+			UserName:    user.Username,
+			DisplayName: user.DisplayName,
+			Role:        string(m.Role),
+			JoinetAt:    m.JoinedAt.Format("2006-01-02T15:04:05Z"),
+		})
+	}
+	return &ChatDetail{
+		Chat:        chat,
+		Members:     memberInfos,
+		CurrentRole: currentRole,
+	}, nil
 }
 
 func (s *chatService) getExistingUser(ctx context.Context, userID string) (*model.User, error) {
