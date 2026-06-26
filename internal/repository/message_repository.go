@@ -12,6 +12,7 @@ import (
 type MessageRepository interface {
 	Create(ctx context.Context, msg *model.EncryptedMessage) error
 	GetChatMessages(ctx context.Context, chatID string, limit, offset int) ([]*model.EncryptedMessage, error)
+	GetLastMessage(ctx context.Context, chatID string) (*model.EncryptedMessage, error)
 	GetByID(ctx context.Context, id string) (*model.EncryptedMessage, error)
 	Update(ctx context.Context, msg *model.EncryptedMessage) error
 	Delete(ctx context.Context, id string) error
@@ -122,6 +123,35 @@ func (r *pgMessageRepository) GetByID(ctx context.Context, id string) (*model.En
 		return nil, fmt.Errorf("get message by id: %w", err)
 	}
 
+	return msg, nil
+}
+
+func (r *pgMessageRepository) GetLastMessage(ctx context.Context, chatID string) (*model.EncryptedMessage, error) {
+	query := `
+        SELECT id, chat_id, sender_id, encrypted_content, nonce, encryption_key_id, content_type, sent_at, edited_at
+        FROM messages
+        WHERE chat_id = $1
+        ORDER BY sent_at DESC
+        LIMIT 1`
+
+	msg := &model.EncryptedMessage{}
+	err := r.pool.QueryRow(ctx, query, chatID).Scan(
+		&msg.ID,
+		&msg.ChatID,
+		&msg.SenderID,
+		&msg.EncryptedContent,
+		&msg.Nonce,
+		&msg.EncryptionKeyID,
+		&msg.ContentType,
+		&msg.SentAt,
+		&msg.EditedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get last message: %w", err)
+	}
 	return msg, nil
 }
 

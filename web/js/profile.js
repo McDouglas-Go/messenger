@@ -1,4 +1,6 @@
 const Profile = {
+    _sessionClickHandler: null, 
+
     async render(container) {
         let user;
         try {
@@ -6,12 +8,6 @@ const Profile = {
         } catch (err) {
             container.innerHTML = `<p class="error">Failed to load profile: ${err.message}</p>`;
             return;
-        }
-        let sessions = [];
-        try {
-            sessions = await Api.get('/sessions');
-        } catch (err) {
-            console.error('Failed to load sessions', err);
         }
 
         const html = `
@@ -37,24 +33,14 @@ const Profile = {
                 </div>
                 <div class="sessions-section">
                     <h3>Sessions</h3>
-                    <div id="sessions-list">
-                        ${sessions.length === 0 ? '<p>No active sessions</p>' : ''}
-                        ${sessions.map(s => `
-                            <div class="session-item ${s.is_current ? 'current' : ''}">
-                                <div class="session-info">
-                                    <span class="session-ua">${escapeHtml(s.user_agent || 'Unknown device')}</span>
-                                    <span class="session-time">Created: ${new Date(s.created_at).toLocaleString()}</span>
-                                    ${s.is_current ? '<span class="current-badge">Current</span>' : ''}
-                                </div>
-                                <button class="revoke-session-btn" data-session-id="${s.id}" ${s.is_current ? 'disabled' : ''}>Revoke</button>
-                            </div>
-                        `).join('')}
-                    </div>
+                    <button id="toggle-sessions-btn" style="display:none;">Hide Sessions</button>
+                    <button id="load-sessions-btn">Show Sessions</button>
+                    <div id="sessions-list"></div>
                 </div>
             </div>
         `;
 
-        container.innerHTML= html;
+        container.innerHTML = html;
 
         document.getElementById('edit-profile-btn')?.addEventListener('click', () => this.openEditModal(user));
         document.getElementById('logout-btn')?.addEventListener('click', () => {
@@ -62,21 +48,68 @@ const Profile = {
         });
         document.getElementById('delete-account-btn')?.addEventListener('click', () => this.confirmDeleteAccount());
 
-        document.querySelectorAll('.revoke-session-btn').forEach(btn => {
-            btn.addEventListener('click', async () => {
-                const sessionId = btn.dataset.sessionId;
-                if (!confirm('Revoke this session?')) return;
-                try {
-                    await Api.del(`/sessions/${sessionId}`);
-                    const updatedSession = await Api.get('/sessions');
-                    this.render(container);
-                } catch (err) {
-                    alert('Failed to revoke session: ' + err.message);
-                }
-            });
-        });
+        document.getElementById('load-sessions-btn')?.addEventListener('click', () => this.loadAndShowSessions());
+        document.getElementById('toggle-sessions-btn')?.addEventListener('click', () => this.hideSessions());
     },
 
+    async loadAndShowSessions() {
+        const sessions = await Api.get('/sessions');
+        this.renderSessionList(sessions);
+        this.attachSessionHandlers();
+        document.getElementById('load-sessions-btn').style.display = 'none';
+        document.getElementById('toggle-sessions-btn').style.display = 'inline-block';
+    },
+
+    hideSessions() {
+        document.getElementById('sessions-list').innerHTML = '';
+        document.getElementById('toggle-sessions-btn').style.display = 'none';
+        document.getElementById('load-sessions-btn').style.display = 'inline-block';
+        if (this._sessionClickHandler) {
+            document.getElementById('sessions-list').removeEventListener('click', this._sessionClickHandler);
+        }
+    },
+
+    renderSessionList(sessions) {
+        const container = document.getElementById('sessions-list');
+        if (!container) return;
+        container.innerHTML = sessions.length === 0
+            ? '<p>No active sessions</p>'
+            : sessions.map(s => `
+                <div class="session-item ${s.is_current ? 'current' : ''}">
+                    <div class="session-info">
+                        <span class="session-ua">${escapeHtml(s.user_agent || 'Unknown device')}</span>
+                        <span class="session-time">Created: ${new Date(s.created_at).toLocaleString()}</span>
+                        ${s.is_current ? '<span class="current-badge">Current</span>' : ''}
+                    </div>
+                    <button class="revoke-session-btn" data-session-id="${s.id}" ${s.is_current ? 'disabled' : ''}>Revoke</button>
+                </div>
+            `).join('');
+    },
+
+    attachSessionHandlers() {
+        const container = document.getElementById('sessions-list');
+        if (!container) return;
+
+        if (this._sessionClickHandler) {
+            container.removeEventListener('click', this._sessionClickHandler);
+        }
+
+        this._sessionClickHandler = async (e) => {
+            const btn = e.target.closest('.revoke-session-btn');
+            if (!btn) return;
+            const sessionId = btn.dataset.sessionId;
+            if (!confirm('Revoke this session?')) return;
+            try {
+                await Api.del(`/sessions/${sessionId}`);
+                const updatedSessions = await Api.get('/sessions');
+                this.renderSessionList(updatedSessions);
+            } catch (err) {
+                alert('Failed to revoke session: ' + err.message);
+            }
+        };
+
+        container.addEventListener('click', this._sessionClickHandler);
+    },
 
     openEditModal(user) {
         const html = `

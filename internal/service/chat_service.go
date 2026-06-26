@@ -11,8 +11,9 @@ import (
 )
 
 type ChatWithInfo struct {
-	Chat      *model.Chat `json:"chat"`
-	OtherUser *UserInfo   `json:"other_user,omitempty"`
+	Chat        *model.Chat             `json:"chat"`
+	OtherUser   *UserInfo               `json:"other_user,omitempty"`
+	LastMessage *model.EncryptedMessage `json:"last_message,omitempty"`
 }
 
 type UserInfo struct {
@@ -49,10 +50,11 @@ type ChatService interface {
 type chatService struct {
 	chatRepo repository.ChatRepository
 	userRepo repository.UserRepository
+	msgRepo  repository.MessageRepository
 }
 
-func NewChatService(chatRepo repository.ChatRepository, userRepo repository.UserRepository) ChatService {
-	return &chatService{chatRepo: chatRepo, userRepo: userRepo}
+func NewChatService(chatRepo repository.ChatRepository, userRepo repository.UserRepository, msgRepo repository.MessageRepository) ChatService {
+	return &chatService{chatRepo: chatRepo, userRepo: userRepo, msgRepo: msgRepo}
 }
 
 func (s *chatService) CreatePrivate(ctx context.Context, userID1, userID2 string) (*model.Chat, error) {
@@ -133,6 +135,10 @@ func (s *chatService) GetUserChats(ctx context.Context, userID string) ([]*ChatW
 	var result []*ChatWithInfo
 	for _, chat := range chats {
 		cwi := &ChatWithInfo{Chat: chat}
+		lastMsg, err := s.msgRepo.GetLastMessage(ctx, chat.ID)
+		if err == nil && lastMsg != nil {
+			cwi.LastMessage = lastMsg
+		}
 		if chat.Type == model.ChatTypePrivate {
 			members, err := s.chatRepo.GetChatMembers(ctx, chat.ID)
 			if err == nil {

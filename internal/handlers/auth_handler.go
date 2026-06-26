@@ -369,7 +369,7 @@ func (h *AuthHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
 	resp := make([]sessionResp, 0, len(sessions))
 	for _, s := range sessions {
 		resp = append(resp, sessionResp{
-			ID:        s.UserID,
+			ID:        s.ID,
 			UserAgent: s.UserAgent,
 			CreatedAt: s.CreatedAt.Format(time.RFC3339),
 			ExpiresAt: s.ExpiresAt.Format(time.RFC3339),

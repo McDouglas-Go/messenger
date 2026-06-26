@@ -581,9 +581,9 @@ body.auth-page #main {
 
 /* profile */
 .profile-page {
-    padding: 20px;
+    padding: 0 15px;
     max-width: 600px;
-    margin: 0 auto;
+    margin: 20px auto;
 }
 
 .profile-card {
@@ -665,6 +665,13 @@ body.auth-page #main {
     border-radius: 12px;
     padding: 20px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    margin-top: 20px;
+}
+
+#sessions-list {
+    max-height: 300px;
+    overflow-y: auto;
+    margin-top: 10px;
 }
 
 .session-item {
@@ -689,7 +696,7 @@ body.auth-page #main {
     font-weight: 500;
 }
 
-.session-ip, .session-time, .session-expires {
+.session-ip, .session-time {
     font-size: 13px;
     color: #666;
 }
@@ -701,6 +708,16 @@ body.auth-page #main {
     padding: 2px 6px;
     border-radius: 10px;
     margin-left: 8px;
+}
+
+#load-sessions-btn, #toggle-sessions-btn {
+    background: #4a90d9;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-top: 10px;
 }
 
 .revoke-session-btn {

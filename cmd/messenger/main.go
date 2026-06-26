@@ -57,7 +57,7 @@ func main() {
 	hub := ws.NewHub(chatRepo, logger)
 
 	authService := service.NewAuthService(userRepo, sessionRepo, jwtManager, cfg.RefreshTokenTTL, logger)
-	chatServise := service.NewChatService(chatRepo, userRepo)
+	chatServise := service.NewChatService(chatRepo, userRepo, msgRepo)
 	messageService := service.NewMessageService(msgRepo, chatRepo, hub, logger)
 	mediaService := service.NewMediaService(mediaRepo, msgRepo, chatRepo, cfg.UploadDir)
 

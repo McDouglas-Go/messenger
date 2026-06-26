@@ -41,11 +41,20 @@ const Chats = {
                 title = chat.name || 'Group Chat';
             }
 
+            let lastMsgText = '...';
+            if (chat.last_message) {
+                try {
+                    lastMsgText = atob(chat.last_message.encrypted_content);
+                } catch (e) {
+                    lastMsgText = '[encrypted]';
+                }
+            }
+
             li.innerHTML = `
                 <div class="chat-avatar"></div>
                 <div class="chat-info">
                     <div class="chat-title">${escapeHtml(title)}</div>
-                    <div class="chat-last-msg">...</div>
+                    <div class="chat-last-msg">${escapeHtml(lastMsgText)}</div>
                 </div>
                 <div class="chat-meta">
                     <div class="chat-time"></div>

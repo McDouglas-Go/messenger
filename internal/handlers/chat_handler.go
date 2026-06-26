@@ -138,25 +138,27 @@ func (h *ChatHandler) GetUserChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type chatInfo struct {
-		ID        string            `json:"id"`
-		Type      string            `json:"type"`
-		Name      *string           `json:"name,omitempty"`
-		CreatedBy string            `json:"created_by"`
-		CreatedAt string            `json:"created_at"`
-		UpdatedAt string            `json:"updated_at"`
-		OtherUser *service.UserInfo `json:"other_user,omitempty"`
+		ID          string                  `json:"id"`
+		Type        string                  `json:"type"`
+		Name        *string                 `json:"name,omitempty"`
+		CreatedBy   string                  `json:"created_by"`
+		CreatedAt   string                  `json:"created_at"`
+		UpdatedAt   string                  `json:"updated_at"`
+		OtherUser   *service.UserInfo       `json:"other_user,omitempty"`
+		LastMessage *model.EncryptedMessage `json:"last_message,omitempty"`
 	}
 
 	respList := make([]chatInfo, 0, len(chatsWithInfo))
 	for _, cwi := range chatsWithInfo {
 		ci := chatInfo{
-			ID:        cwi.Chat.ID,
-			Type:      string(cwi.Chat.Type),
-			Name:      cwi.Chat.Name,
-			CreatedBy: cwi.Chat.CreatedBy,
-			CreatedAt: cwi.Chat.CreatedAt.Format(time.RFC3339),
-			UpdatedAt: cwi.Chat.UpdatedAt.Format(time.RFC3339),
-			OtherUser: cwi.OtherUser,
+			ID:          cwi.Chat.ID,
+			Type:        string(cwi.Chat.Type),
+			Name:        cwi.Chat.Name,
+			CreatedBy:   cwi.Chat.CreatedBy,
+			CreatedAt:   cwi.Chat.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:   cwi.Chat.UpdatedAt.Format(time.RFC3339),
+			OtherUser:   cwi.OtherUser,
+			LastMessage: cwi.LastMessage,
 		}
 		respList = append(respList, ci)
 	}
