@@ -20,12 +20,105 @@ const Auth = {
         const password = document.getElementById('login-password').value;
 
         try {
-            const data = await Api.login(email, password);
-            Api.setToken(data.access_token);
+            await Api.login(email, password);
+            let keys = await KeyStorage.loadKeys(Api.userId);
+            if (!keys) {
+                await new Promise((resolve, reject) => {
+                    this._showKeyChoiceModal(resolve, reject);
+                });
+                keys = await KeyStorage.loadKeys(Api.userId);
+                if (!keys) {
+                    throw new Error('Failed to set up encryption keys');
+                }
+                
+            }
             window.location.hash = '#chats';
         } catch (err) {
             alert('Login failed: ' + err.message);
         }
+    },
+
+    _showKeyChoiceModal(resolve, reject) {
+        const html = `
+            <div class="modal-content">
+                <h3>Encryption Keys Required</h3>
+                <p>No encryption keys found. Please choose an option:</p>
+                <div class="modal-buttons">
+                    <button id="generate-keys-btn">Generate New Keys</button>
+                    <button id="upload-key-btn">Upload Key File</button>
+                </div>
+            </div>
+        `;
+        Modals.createModal('key-choice-modal', html);
+        Modals.show('key-choice-modal');
+
+        document.getElementById('generate-keys-btn').onclick = async () => {
+            Modals.hide('key-choice-modal');
+            await this.generateAndSaveKeys();
+            resolve();
+        };
+
+        document.getElementById('upload-key-btn').onclick = async () => {
+            Modals.hide('key-choice-modal');
+            const file = await this.selectPrivateKeyFile();
+            if (file) {
+                try {
+                    const text = await file.text();
+                    const jwk = JSON.parse(text);
+                    if (!jwk.d || !jwk.x || !jwk.y) throw new Error('Invalid key');
+                    const privateKey = await CryptoModule.importPrivateKey(jwk);
+                    const publicJwkObj = await crypto.subtle.exportKey('jwk', privateKey);
+                    delete publicJwkObj.d;
+                    delete publicJwkObj.key_ops;
+                    const publicKeyJwk = JSON.stringify(publicJwkObj);
+                    await KeyStorage.saveKeys(Api.userId, JSON.stringify(jwk), publicKeyJwk);
+                    await Api.put('/me', { public_key: publicKeyJwk });
+                    resolve();
+                } catch (e) {
+                    alert('Invalid key file. Please try again.');
+                    this._showKeyChoiceModal(resolve, reject);
+                }
+            } else {
+                this._showKeyChoiceModal(resolve, reject);
+            }
+        };
+    },
+
+    selectPrivateKeyFile() {
+        return new Promise((resolve) => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json,application/json';
+            input.onchange = (e) => {
+                const file = e.target.files[0];
+                resolve(file || null);
+            };
+            const onFocus = () => {
+                window.removeEventListener('focus', onFocus);
+                if (!input.files || input.files.length === 0) {
+                    resolve(null);
+                }
+            };
+            window.addEventListener('focus', onFocus, { once: true });
+            input.click();
+        });
+    },
+
+    async generateAndSaveKeys() {
+        const keyPair = await CryptoModule.generateKeyPair();
+        const privateJwkStr = await CryptoModule.exportPrivateKey(keyPair.privateKey);
+        const publicJwkStr = await CryptoModule.exportPublicKey(keyPair.publicKey);
+        await KeyStorage.saveKeys(Api.userId, privateJwkStr, publicJwkStr);
+        await Api.put('/me', { public_key: publicJwkStr });
+        const blob = new Blob([privateJwkStr], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'messenger_private_key.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
     },
 
     renderRegister(container) {

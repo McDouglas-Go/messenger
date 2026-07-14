@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"github.com/McDouglas-Go/messenger/internal/middleware"
 	"github.com/McDouglas-Go/messenger/internal/model"
 	"github.com/McDouglas-Go/messenger/internal/service"
+	"github.com/McDouglas-Go/messenger/internal/ws"
 	"github.com/gorilla/mux"
 )
 
@@ -45,12 +47,19 @@ type removeMemberRequest struct {
 }
 
 type ChatHandler struct {
-	chatService service.ChatService
-	log         *slog.Logger
+	chatService     service.ChatService
+	groupKeyService service.GroupService
+	hub             *ws.Hub
+	log             *slog.Logger
 }
 
-func NewChatHandler(chatService service.ChatService, logger *slog.Logger) *ChatHandler {
-	return &ChatHandler{chatService: chatService, log: logger}
+func NewChatHandler(chatService service.ChatService, groupKeyService service.GroupService, hub *ws.Hub, logger *slog.Logger) *ChatHandler {
+	return &ChatHandler{
+		chatService:     chatService,
+		groupKeyService: groupKeyService,
+		hub:             hub,
+		log:             logger,
+	}
 }
 
 func (h *ChatHandler) CreatePrivate(w http.ResponseWriter, r *http.Request) {
@@ -128,6 +137,87 @@ func (h *ChatHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *ChatHandler) SetGroupKey(w http.ResponseWriter, r *http.Request) {
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
+	chatID := mux.Vars(r)["chat_id"]
+	var req struct {
+		EncryptedSymmetricKey string `json:"encrypted_symmetric_key"`
+		KeyVersion            int    `json:"key_version"`
+		UserID                string `json:"user_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	targetUserID := req.UserID
+	if targetUserID == "" {
+		targetUserID = claims.UserID
+	}
+
+	if targetUserID != claims.UserID {
+		detail, err := h.chatService.GetChatWithMembers(r.Context(), chatID, claims.UserID)
+		if err != nil {
+			http.Error(w, "Failed to get chat details", http.StatusInternalServerError)
+			return
+		}
+		if detail.CurrentRole == "member" {
+			http.Error(w, "Only owner or admin can save keys for other members", http.StatusForbidden)
+			return
+		}
+		isMember := false
+		for _, m := range detail.Members {
+			if m.UserID == targetUserID {
+				isMember = true
+				break
+			}
+		}
+		if !isMember {
+			http.Error(w, "Target user is not a member of this chat", http.StatusBadRequest)
+			return
+		}
+	}
+
+	encryptedKey, err := base64.StdEncoding.DecodeString(req.EncryptedSymmetricKey)
+	if err != nil {
+		http.Error(w, "Invalid base64 for encrypted key", http.StatusBadRequest)
+		return
+	}
+	if err := h.groupKeyService.SetKey(r.Context(), chatID, targetUserID, encryptedKey, req.KeyVersion); err != nil {
+		h.log.Error("SetGroupKey failed", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *ChatHandler) GetGroupKey(w http.ResponseWriter, r *http.Request) {
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
+	chatID := mux.Vars(r)["chat_id"]
+
+	key, err := h.groupKeyService.GetKey(r.Context(), chatID, claims.UserID)
+	if err != nil {
+		h.log.Error("GetGroupKey failed", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if key == nil {
+		http.Error(w, "Key not found", http.StatusNotFound)
+		return
+	}
+
+	resp := map[string]interface{}{
+		"encrypted_symmetric_key": base64.StdEncoding.EncodeToString(key.EncryptedSymmetricKey),
+		"key_version":             key.KeyVersion,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+}
+
 func (h *ChatHandler) GetUserChats(w http.ResponseWriter, r *http.Request) {
 	claims, _ := middleware.GetClaimsFromContext(r.Context())
 
@@ -146,6 +236,7 @@ func (h *ChatHandler) GetUserChats(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt   string                  `json:"updated_at"`
 		OtherUser   *service.UserInfo       `json:"other_user,omitempty"`
 		LastMessage *model.EncryptedMessage `json:"last_message,omitempty"`
+		SenderName  string                  `json:"sender_name,omitempty"`
 	}
 
 	respList := make([]chatInfo, 0, len(chatsWithInfo))
@@ -159,6 +250,7 @@ func (h *ChatHandler) GetUserChats(w http.ResponseWriter, r *http.Request) {
 			UpdatedAt:   cwi.Chat.UpdatedAt.Format(time.RFC3339),
 			OtherUser:   cwi.OtherUser,
 			LastMessage: cwi.LastMessage,
+			SenderName:  cwi.SenderName,
 		}
 		respList = append(respList, ci)
 	}
@@ -223,6 +315,28 @@ func (h *ChatHandler) AddMembers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	detail, err := h.chatService.GetChatWithMembers(r.Context(), chatID, claims.UserID)
+	if err == nil {
+		event := map[string]interface{}{
+			"event": "chat_members_changed",
+			"data": map[string]string{
+				"chat_id": chatID,
+			},
+		}
+		for _, member := range detail.Members {
+			h.hub.SendToUser(member.UserID, event)
+		}
+	}
+	for _, userID := range req.UserIDs {
+		event := map[string]interface{}{
+			"event": "chat_added",
+			"data": map[string]string{
+				"chat_id": chatID,
+			},
+		}
+		h.hub.SendToUser(userID, event)
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -243,6 +357,27 @@ func (h *ChatHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 		h.log.Error("RemoveMember failed", "error", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	event := map[string]interface{}{
+		"event": "chat_removed",
+		"data": map[string]string{
+			"chat_id": chatID,
+		},
+	}
+	h.hub.SendToUser(req.UserID, event)
+
+	detail, err := h.chatService.GetChatWithMembers(r.Context(), chatID, claims.UserID)
+	if err == nil {
+		event := map[string]interface{}{
+			"event": "chat_members_changed",
+			"data": map[string]string{
+				"chat_id": chatID,
+			},
+		}
+		for _, member := range detail.Members {
+			h.hub.SendToUser(member.UserID, event)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -3,6 +3,8 @@ const Chats = {
     currentChatId: null,
     ws: null,
     currentChatDetail: null,
+    currentChatSharedKey: null,
+    chatKeys: {},
 
     async init() {
         await this.loadChats();
@@ -12,17 +14,18 @@ const Chats = {
     async loadChats() {
         try {
             this.chats = await Api.getChats();
-            this.renderChatList();
+            await this.renderChatList();
         } catch (err) {
             console.error('Failed to load chats:', err);
         }
     },
 
-    renderChatList() {
+    async renderChatList() {
         const list = document.getElementById('chat-list');
         if (!list) return;
         list.innerHTML = '';
-        this.chats.forEach(chat => {
+
+        for (const chat of this.chats) {
             const li = document.createElement('li');
             li.dataset.chatId = chat.id;
             li.className = 'chat-item';
@@ -34,19 +37,31 @@ const Chats = {
             if (chat.type === 'private') {
                 if (chat.other_user) {
                     title = chat.other_user.display_name || chat.other_user.username;
-                } else {
-                    title = 'Unknown';
                 }
             } else {
-                title = chat.name || 'Group Chat';
+                title = chat.name;
             }
 
             let lastMsgText = '...';
             if (chat.last_message) {
-                try {
-                    lastMsgText = atob(chat.last_message.encrypted_content);
-                } catch (e) {
-                    lastMsgText = '[encrypted]';
+                let plain = '';
+                const key = this.chatKeys[chat.id];
+                if (key) {
+                    try {
+                        const packed = CryptoModule.unpackEncryptedData(chat.last_message);
+                        plain = await CryptoModule.decrypt(key, packed);
+                    } catch (e) {
+                        plain = ' ';
+                    }
+                } else {
+                    plain = ' ';
+                }
+                if (chat.last_message.sender_id === Api.userId) {
+                    lastMsgText = 'You: ' + plain;
+                } else if (chat.type === 'group') {
+                    lastMsgText = chat.sender_name + ': ' + plain;
+                } else {
+                    lastMsgText = plain;
                 }
             }
 
@@ -60,15 +75,17 @@ const Chats = {
                     <div class="chat-time"></div>
                 </div>
             `;
-            li.addEventListener('click', () => this.selectChat(chat.id));
+            li.addEventListener('click', () => Chats.selectChat(chat.id));
             list.appendChild(li);
-        });
+        }
     },
-
     async selectChat(chatId) {
         if (this.currentChatId === chatId) return;
         this.currentChatId = chatId;
-        this.renderChatList();
+        this.currentChatSharedKey = null;
+        await this.renderChatList();
+        const sidebar = document.getElementById('chat-info-sidebar');
+        if (sidebar) sidebar.style.display = 'none';
         await this.loadChatDetail(chatId);
         await this.loadMessages(chatId);
     },
@@ -148,9 +165,28 @@ const Chats = {
             const detail = await Api.get(`/chats/${chatId}`);
             this.currentChatDetail = detail;
             this.renderChatHeader();
-            const sidebar = document.getElementById('chat-info-sidebar');
-            if (sidebar && sidebar.style.display === 'flex') {
-                this.showChatSidebar();
+            if (detail.chat.type === 'private') {
+                const other = detail.members.find(m => m.user_id !== Api.userId);
+                if (other) {
+                    try {
+                        const pubResp = await Api.get(`/users/${other.user_id}/public-key`);
+                        if (pubResp && pubResp.public_key) {
+                            const partherJwk = JSON.parse(pubResp.public_key);
+                            const partnerPublicKey = await CryptoModule.importPublicKey(partherJwk);
+                            const myKeys = await KeyStorage.loadKeys(Api.userId);
+                            if (myKeys) {
+                                this.currentChatSharedKey = await CryptoModule.deriveSharedKey(myKeys.privateKey, partnerPublicKey);
+                                this.chatKeys[chatId] = this.currentChatSharedKey;
+                            } else {
+                                console.warn('No private key found in storage, cannot encrypt');
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Failed to set up encryption for chat', e);
+                    }
+                }
+            } else {
+                await this.obtainGroupKey(chatId);
             }
         } catch (err) {
             console.error('Failed to load chat detail', err);
@@ -222,6 +258,8 @@ const Chats = {
                     <div class="chat-actions">
                         ${current_role === 'owner' || current_role === 'admin' ? 
                             `<button id="add-members-btn">Add Members</button>` : ''}
+                        ${current_role !== 'owner' ? 
+                            `<button id="leave-chat-btn">Leave Chat</button>` : ''}
                         ${current_role === 'owner' ? 
                             `<button id="delete-chat-btn">Delete Chat</button>` : ''}
                     </div>
@@ -262,6 +300,7 @@ const Chats = {
             }
 
             document.getElementById('add-members-btn')?.addEventListener('click', () => this.showAddMembersModal());
+            document.getElementById('leave-chat-btn')?.addEventListener('click', () => this.leaveChat());
             document.getElementById('delete-chat-btn')?.addEventListener('click', () => this.deleteCurrentChat());
 
             document.querySelectorAll('.kick-member-btn').forEach(btn => {
@@ -316,6 +355,15 @@ const Chats = {
                 document.querySelector('.rename-btn')?.addEventListener('click', () => this.startRenameGroup());
             }
         });
+    },
+
+    async leaveChat() {
+        if (!confirm('Are you sure you want to leave this chat?')) return;
+        try {
+            await Api.del(`/chats/${this.currentChatId}/members`, { user_id: Api.userId });
+        } catch (err) {
+            alert('Failed to leave chat: ' + err.message);
+        }
     },
 
     async deleteCurrentChat() {
@@ -435,6 +483,7 @@ const Chats = {
         try {
             await Api.post(`/chats/${this.currentChatId}/members`, { user_ids: userIds });
             await this.loadChatDetail(this.currentChatId);
+            await this.distributeGroupKey(this.currentChatId, userIds);
         } catch (err) {
             alert('Failed to add members: ' + err.message);
         }
@@ -488,14 +537,23 @@ const Chats = {
 
         try {
             const messages = await Api.getMessages(chatId);
-            messages.forEach(m => {
-                try {
-                    m.text = atob(m.encrypted_content);
-                } catch (e) {
-                    m.text = '[encrypted]';
+            const decryptedMessages = [];
+            for (const m of messages) {
+                let text = null;
+                if (this.currentChatSharedKey) {
+                    try {
+                        const packed = CryptoModule.unpackEncryptedData(m);
+                        text = await CryptoModule.decrypt(this.currentChatSharedKey, packed);
+                    } catch (e) {
+                        text = null;
+                    }
+                } 
+                if (text !== null) {
+                    m.text = text;
+                    decryptedMessages.push(m);
                 }
-            });
-            this.renderMessages(messages);
+            }
+            this.renderMessages(decryptedMessages);
         } catch (err) {
             main.innerHTML = `<div class="error">Failed to load messages: ${err.message}</div>`;
         }
@@ -508,9 +566,9 @@ const Chats = {
             <div id="chat-header"></div>
             <div id="messages-container">
                 <div id="messages-list"></div>
-                <div id="typing-indicator" class="typing-indicator"></div>
+                <div id="typing-indicator" class="typing-indicator" style="display:none;"></div>
                 <form id="message-form">
-                    <input type="text" id="message-input" placeholder="Message…" autocomplete="off">
+                    <input type="text" id="message-input" placeholder="Write a message…" autocomplete="off">
                     <button type="submit">Send</button>
                 </form>
             </div>
@@ -518,43 +576,61 @@ const Chats = {
 
         const list = document.getElementById('messages-list');
         messages.forEach(msg => this.appendMessage(msg, list));
-
-        document.getElementById('message-form').onsubmit = (e) => {
-            e.preventDefault();
-            this.sendMessage();
-        };
-
         const msgInput = document.getElementById('message-input');
-        let typingTimer;
+        const sendBtn = document.querySelector('#message-form button');
 
-        msgInput.addEventListener('input', () => {
-            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-            this.ws.send(JSON.stringify({
-                event: 'typing',
-                data: { chat_id: this.currentChatId }
-            }));
-            clearTimeout(typingTimer);
-            typingTimer = setTimeout(() => {
-                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                    this.ws.send(JSON.stringify({
+        if (msgInput && sendBtn) {
+            if (!this.currentChatSharedKey) {
+                msgInput.disabled = true;
+                sendBtn.disabled = true;
+                msgInput.placeholder = 'Waiting for encryption keys…';
+            } else {
+                msgInput.disabled = false;
+                sendBtn.disabled = false;
+                msgInput.placeholder = 'Message…';
+            }
+        }
+
+        const form = document.getElementById('message-form');
+        if (form) {
+            form.onsubmit = (e) => {
+                e.preventDefault();
+                this.sendMessage();
+            };
+        }
+
+        let typingTimer;
+        if (msgInput) {
+            msgInput.addEventListener('input', () => {
+                if (!Chats.ws || Chats.ws.readyState !== WebSocket.OPEN) return;
+                Chats.ws.send(JSON.stringify({
+                    event: 'typing',
+                    data: { chat_id: Chats.currentChatId }
+                }));
+                clearTimeout(typingTimer);
+                typingTimer = setTimeout(() => {
+                    if (Chats.ws && Chats.ws.readyState === WebSocket.OPEN) {
+                        Chats.ws.send(JSON.stringify({
+                            event: 'stop_typing',
+                            data: { chat_id: Chats.currentChatId }
+                        }));
+                    }
+                }, 2000);
+            });
+
+            msgInput.addEventListener('keydown', () => {
+                clearTimeout(typingTimer);
+                if (Chats.ws && Chats.ws.readyState === WebSocket.OPEN) {
+                    Chats.ws.send(JSON.stringify({
                         event: 'stop_typing',
-                        data: { chat_id: this.currentChatId }
+                        data: { chat_id: Chats.currentChatId }
                     }));
                 }
-            }, 2000);
-        });
+            });
+        }
 
-        msgInput.addEventListener('keydown', (e) => {
-            clearTimeout(typingTimer);
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                this.ws.send(JSON.stringify({
-                    event: 'stop_typing',
-                    data: { chat_id: this.currentChatId }
-                }));
-            }
-        });
         this.renderChatHeader();
-        list.scrollTop = list.scrollHeight;
+        if (list) list.scrollTop = list.scrollHeight;
     },
 
     appendMessage(msg, container = null) {
@@ -572,7 +648,13 @@ const Chats = {
             const editedTime = new Date(msg.edited_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             editedStr = `<span class="edited-at">edited at ${editedTime}</span>`;
         }
+        let senderName = '';
+        if (this.currentChatDetail && this.currentChatDetail.chat.type === 'group' && msg.sender_id !== Api.userId) {
+            const member = this.currentChatDetail.members.find(m => m.user_id === msg.sender_id);
+            senderName = member ? (member.display_name || member.username) : 'Unknown';
+        }
         div.innerHTML = `
+            ${senderName ? `<div class="sender-name">${escapeHtml(senderName)}</div>` : ''}
             <div class="message-content">${escapeHtml(msg.text || '')}</div>
             <div class="message-meta">
                 <span class="message-time">${timeStr}</span>
@@ -634,11 +716,20 @@ const Chats = {
         const text = input.value.trim();
         if (!text || !this.currentChatId) return;
 
-        const encoded = btoa(unescape(encodeURIComponent(text)));
-        const nonce = btoa(Math.random().toString()).slice(0,12);
-
+        let encryptedContent, nonce;
+        if (this.currentChatSharedKey) {
+            try {
+                const enc = await CryptoModule.encrypt(this.currentChatSharedKey, text);
+                const packed = CryptoModule.packEncryptedData(enc);
+                encryptedContent = packed.encrypted_content;
+                nonce = packed.nonce;
+            } catch (e) {
+                alert('Encryption failed: ' + e.message);
+                return;
+            }
+        }
         try {
-            await Api.sendMessage(this.currentChatId, encoded, nonce, 'text');
+            await Api.sendMessage(this.currentChatId, encryptedContent, nonce, 'text');
             input.value = '';
         } catch (err) {
             alert('Failed to send message: ' + err.message);
@@ -661,10 +752,20 @@ const Chats = {
                 contentDiv.textContent = oldText;
                 return;
             }
+            let encryptedContent, nonce;
+            if (this.currentChatSharedKey) {
+                try {
+                    const enc = await CryptoModule.encrypt(this.currentChatSharedKey, newText);
+                    const packed = CryptoModule.packEncryptedData(enc);
+                    encryptedContent = packed.encrypted_content;
+                    nonce = packed.nonce;
+                } catch (e) {
+                    alert('Encryption failed: ' + e.message);
+                    return;
+                }
+            }
             try {
-                const encoded = btoa(unescape(encodeURIComponent(newText)));
-                const nonce = btoa(Math.random().toString()).slice(0, 12);
-                await Api.editMessage(this.currentChatId, msg.id, encoded, nonce, 'text');
+                await Api.editMessage(this.currentChatId, msg.id, encryptedContent, nonce, 'text');
             } catch (err) {
                 alert('Failed to edit message: ' + err.message);
                 contentDiv.textContent = oldText;
@@ -689,6 +790,107 @@ const Chats = {
             await Api.deleteMessage(this.currentChatId, msg.id);
         } catch (err) {
             alert('Failed to delete message: ' + err.message);
+        }
+    },
+
+    async obtainGroupKey(chatId) {
+        const members = this.currentChatDetail.members;
+        const owner = members.find(m => m.role === 'owner');
+        if (!owner) {
+            console.error('No owner in group');
+            return;
+        }
+        const myKeys = await KeyStorage.loadKeys(Api.userId);
+        if (!myKeys) {
+            console.error('No local keys');
+            return;
+        }
+
+        try {
+            const resp = await Api.get(`/chats/${chatId}/group-key`);
+            if (resp?.encrypted_symmetric_key) {
+                const combinedBuffer = CryptoModule.base64ToArrayBuffer(resp.encrypted_symmetric_key);
+                const combined = new Uint8Array(combinedBuffer);
+                const nonce = combined.slice(0, 12).buffer;
+                const ciphertext = combined.slice(12).buffer;
+                
+                let sharedKeyWithOwner;
+                if (owner.user_id === Api.userId) {
+                    sharedKeyWithOwner = await CryptoModule.deriveSharedKey(myKeys.privateKey, myKeys.publicKey);
+                } else {
+                    const ownerPubResp = await Api.get(`/users/${owner.user_id}/public-key`);
+                    if (!ownerPubResp?.public_key) throw new Error('Owner public key not found');
+                    const ownerPublicKey = await CryptoModule.importPublicKey(JSON.parse(ownerPubResp.public_key));
+                    sharedKeyWithOwner = await CryptoModule.deriveSharedKey(myKeys.privateKey, ownerPublicKey);
+                }
+                const rawKey = await crypto.subtle.decrypt(
+                    { name: 'AES-GCM', iv: nonce },
+                    sharedKeyWithOwner,
+                    ciphertext
+                );
+                this.currentChatSharedKey = await crypto.subtle.importKey(
+                    'raw',
+                    rawKey,
+                    { name: 'AES-GCM', length: 256 },
+                    false,
+                    ['encrypt', 'decrypt']
+                );
+                this.chatKeys[chatId] = this.currentChatSharedKey;
+                return;
+            }
+        } catch (e) {
+            if (owner.user_id === Api.userId) {
+                await this.generateGroupKey(chatId);
+                const memberIds = members.map(m => m.user_id);
+                await this.distributeGroupKey(chatId, memberIds);
+            } else {
+                console.warn('Group key not available and user is not owner');
+                this.currentChatSharedKey = null;
+            }
+        }
+    },
+    
+    async generateGroupKey(chatId) {
+        const aesKey = await crypto.subtle.generateKey(
+            {name: 'AES-GCM', length: 256},
+            true,
+            ['encrypt', 'decrypt']
+        );
+        this.currentChatSharedKey = aesKey;
+        this.chatKeys[chatId] = aesKey;
+        return aesKey;
+    },
+
+    async distributeGroupKey(chatId, userIds) {
+        if (!this.currentChatSharedKey) {
+            console.error('No current group key to distribute');
+            return;
+        }
+        const myKeys = await KeyStorage.loadKeys(Api.userId);
+        if (!myKeys) {
+            console.error('No local keys');
+            return;
+        }
+        const rawKey = await crypto.subtle.exportKey('raw', this.currentChatSharedKey);
+        for (const userId of userIds) {
+            try {
+                const pubResp = await Api.get(`/users/${userId}/public-key`);
+                if (!pubResp?.public_key) continue;
+                const partnerPublicKey = await CryptoModule.importPublicKey(JSON.parse(pubResp.public_key));
+                const sharedKey = await CryptoModule.deriveSharedKey(myKeys.privateKey, partnerPublicKey);
+                const enc = await CryptoModule.encryptBuffer(sharedKey, rawKey);
+                const combined = new Uint8Array(enc.nonce.byteLength + enc.ciphertext.byteLength);
+                combined.set(new Uint8Array(enc.nonce), 0);
+                combined.set(new Uint8Array(enc.ciphertext), enc.nonce.byteLength);
+                const combinedBase64 = CryptoModule.arrayBufferToBase64(combined.buffer);
+                await Api.post(`/chats/${chatId}/group-key`, {
+                    encrypted_symmetric_key: combinedBase64,
+                    key_version: 1,
+                    user_id: userId
+                });
+            } catch (e) {
+                console.error('Failed to distribute key to', userId, e);
+            }
         }
     },
 
@@ -751,6 +953,15 @@ const Chats = {
                 case 'stop_typing':
                     this.onStopTyping(payload);
                     break;
+                case 'chat_added':
+                    this.onChatAdded(payload);
+                    break;
+                case 'chat_removed':
+                    this.onChatRemoved(payload);
+                    break;
+                case 'chat_members_changed':
+                    this.onMembersChanged(payload);
+                    break;
                 default:
                     console.warn('Unknown WS event:', event);
             }
@@ -761,17 +972,16 @@ const Chats = {
 
     onNewMessage(msg) {
         this.loadChats();
-
         if (this.currentChatId !== msg.chat_id) return;
-        try {
-            msg.text = atob(msg.encrypted_content);
-        } catch (e) {
-            msg.text = '[encrypted]';
+        if(this.currentChatSharedKey) {
+            const packed = CryptoModule.unpackEncryptedData(msg);
+            CryptoModule.decrypt(this.currentChatSharedKey, packed).then(plain => {
+                msg.text = plain;
+                this.appendMessage(msg);
+                const list = document.getElementById('messages-list');
+                if (list) list.scrollTop = list.scrollHeight;
+            });
         }
-
-        this.appendMessage(msg);
-        const list = document.getElementById('messages-list');
-        if (list) list.scrollTop = list.scrollHeight;
     },
 
     onMessageUpdated(payload) {
@@ -780,33 +990,29 @@ const Chats = {
         const msgDiv = document.querySelector(`.message[data-message-id="${payload.id}"]`);
         if (!msgDiv) return;
 
-        const contentDiv = msgDiv.querySelector('.message-content');
-        if (contentDiv) {
-            try {
-                contentDiv.textContent = atob(payload.encrypted_content);
-            } catch (e) {
-                contentDiv.textContent = '[encrypted]';
+        const updateContent = (plainText) => {
+            const contentDiv = msgDiv.querySelector('.message-content');
+            if (contentDiv) contentDiv.textContent = plainText;
+            const timeSpan = msgDiv.querySelector('.message-time');
+            if (timeSpan) timeSpan.textContent = new Date(payload.sent_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+            let editedSpan = msgDiv.querySelector('.edited-at');
+            const metaDiv = msgDiv.querySelector('.message-meta');
+            if (payload.edited_at) {
+                const editedTime = new Date(payload.edited_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                if (editedSpan) {
+                    editedSpan.textContent = `edited at ${editedTime}`;
+                } else if (metaDiv) {
+                    editedSpan = document.createElement('span');
+                    editedSpan.className = 'edited-at';
+                    editedSpan.textContent = `edited at ${editedTime}`;
+                    metaDiv.appendChild(editedSpan);
+                }
             }
-        }
-
-        const timeSpan = msgDiv.querySelector('.message-time');
-        if (timeSpan && payload.sent_at) {
-            timeSpan.textContent = new Date(payload.sent_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        }
-
-        let editedSpan = msgDiv.querySelector('.edited-at');
-        const metaDiv = msgDiv.querySelector('.message-meta');
-
-        if (payload.edited_at) {
-            const editedTime = new Date(payload.edited_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            if (editedSpan) {
-                editedSpan.textContent = `edited at ${editedTime}`;
-            } else if (metaDiv) {
-                editedSpan = document.createElement('span');
-                editedSpan.className = 'edited-at';
-                editedSpan.textContent = `edited at ${editedTime}`;
-                metaDiv.appendChild(editedSpan);
-            }
+        };
+        if (this.currentChatSharedKey) {
+            const packed = CryptoModule.unpackEncryptedData(payload);
+            CryptoModule.decrypt(this.currentChatSharedKey, packed).then(updateContent);
         }
     },
 
@@ -827,7 +1033,8 @@ const Chats = {
         if (this.currentChatId !== payload.chat_id) return;
         const typingEl = document.getElementById('typing-indicator');
         if (typingEl) {
-            typingEl.textContent = `${(payload.user_id || '').slice(0, 8)} is typing...`;
+            const member = this.currentChatDetail.members.find(m => m.user_id === payload.user_id);
+            typingEl.textContent = `${member.display_name || member.username} is typing...`;
             typingEl.style.display = 'block';
             clearTimeout(this._typingTimeout);
             this._typingTimeout = setTimeout(() => {
@@ -840,6 +1047,36 @@ const Chats = {
         if (this.currentChatId !== payload.chat_id) return;
         const typingEl = document.getElementById('typing-indicator');
         if (typingEl) typingEl.style.display = 'none';
+    },
+
+    onChatAdded(payload) {
+        this.loadChats();
+    },
+
+    onChatRemoved(payload) {
+        if (this.currentChatId === payload.chat_id) {
+            const sidebar = document.getElementById('chat-info-sidebar');
+            if (sidebar) sidebar.style.display = 'none';
+            this.currentChatId = null;
+            this.currentChatDetail = null;
+            const main = document.getElementById('main');
+            if (main) {
+                main.classList.remove('chat-open');
+                main.innerHTML = '<div class="chat-placeholder">Select a chat to start messaging</div>';
+            }
+        }
+        this.chats = this.chats.filter(c => c.id !== payload.chat_id);
+        this.renderChatList();
+    },
+
+    onMembersChanged(payload) {
+        if (this.currentChatId !== payload.chat_id) return;
+        this.loadChatDetail(this.currentChatId).then(() => {
+            const sidebar = document.getElementById('chat-info-sidebar');
+            if (sidebar && sidebar.style.display === 'flex') {
+                this.showChatSidebar();
+            }
+        });
     }
 };
 

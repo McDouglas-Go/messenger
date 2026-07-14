@@ -14,6 +14,7 @@ type ChatWithInfo struct {
 	Chat        *model.Chat             `json:"chat"`
 	OtherUser   *UserInfo               `json:"other_user,omitempty"`
 	LastMessage *model.EncryptedMessage `json:"last_message,omitempty"`
+	SenderName  string                  `json:"sender_name,omitempty"`
 }
 
 type UserInfo struct {
@@ -138,6 +139,13 @@ func (s *chatService) GetUserChats(ctx context.Context, userID string) ([]*ChatW
 		lastMsg, err := s.msgRepo.GetLastMessage(ctx, chat.ID)
 		if err == nil && lastMsg != nil {
 			cwi.LastMessage = lastMsg
+			sender, err := s.userRepo.GetByID(ctx, cwi.LastMessage.SenderID)
+			if err == nil && sender != nil {
+				cwi.SenderName = sender.DisplayName
+				if cwi.SenderName == "" {
+					cwi.SenderName = sender.Username
+				}
+			}
 		}
 		if chat.Type == model.ChatTypePrivate {
 			members, err := s.chatRepo.GetChatMembers(ctx, chat.ID)
@@ -312,6 +320,9 @@ func (s *chatService) RemoveMember(ctx context.Context, userID, chatID, targetUs
 	if chat == nil {
 		return errors.New("chat not found")
 	}
+	if chat.Type != model.ChatTypeGroup {
+		return errors.New("member cannot be remowed from private chat")
+	}
 
 	requester, err := s.chatRepo.GetMember(ctx, chatID, userID)
 	if err != nil {
@@ -325,7 +336,7 @@ func (s *chatService) RemoveMember(ctx context.Context, userID, chatID, targetUs
 		if userID == chat.CreatedBy && chat.Type == model.ChatTypeGroup {
 			return errors.New("owner cannot leave the group; transfer ownership or delete the chat")
 		} else {
-			if requester.Role != model.RoleOwner && requester.Role != model.RoleAdmin {
+			if requester.Role != model.RoleOwner && requester.Role != model.RoleAdmin && requester.UserID != targetUserID {
 				return errors.New("only owner or admin can remove members")
 			}
 			if targetUserID == chat.CreatedBy {

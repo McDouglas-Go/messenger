@@ -70,9 +70,11 @@ CREATE TABLE sessions (
 
 CREATE INDEX idx_sessions_user ON sessions (user_id);
 
-CREATE TABLE group_encryption_keys (
-    chat_id UUID PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
-    encrypted_symmetric_key BYTEA NOT NULL,    
+CREATE TABLE IF NOT EXISTS group_encryption_keys (
+    chat_id UUID NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    encrypted_symmetric_key BYTEA NOT NULL,
     key_version INT NOT NULL DEFAULT 1,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (chat_id, user_id)
 );

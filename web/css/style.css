@@ -259,6 +259,13 @@ body.auth-page #main {
     overflow: hidden;
 }
 
+.sender-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: #2c3e50;
+    margin-bottom: 4px;
+}
+
 /* message form */
 
 #message-form {
@@ -442,6 +449,40 @@ body.auth-page #main {
     border: 1px solid #ddd;
     border-radius: 6px;
     font-size: 14px;
+}
+
+.modal-buttons {
+    display: flex;
+    justify-content: space-around;
+    margin-top: 20px;
+    gap: 10px;
+}
+
+.modal-buttons button {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    flex: 1;
+}
+
+#generate-keys-btn {
+    background: #4a90d9;
+    color: white;
+}
+
+#upload-key-btn {
+    background: #e0e0e0;
+    color: #333;
+}
+
+#generate-keys-btn:hover {
+    background: #357abd;
+}
+
+#upload-key-btn:hover {
+    background: #ccc;
 }
 
 /* context menu */

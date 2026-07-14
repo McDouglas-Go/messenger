@@ -52,17 +52,19 @@ func main() {
 	userRepo := repository.NewUserRepository(pool)
 	sessionRepo := repository.NewSessionRepository(pool)
 	chatRepo := repository.NewChatRepository(pool)
+	groupKeyRepo := repository.NewGroupKeyRepository(pool)
 	msgRepo := repository.NewMessageRepository(pool)
 	mediaRepo := repository.NewMediaRepository(pool)
 	hub := ws.NewHub(chatRepo, logger)
 
 	authService := service.NewAuthService(userRepo, sessionRepo, jwtManager, cfg.RefreshTokenTTL, logger)
 	chatServise := service.NewChatService(chatRepo, userRepo, msgRepo)
+	groupKeyService := service.NewGroupService(groupKeyRepo)
 	messageService := service.NewMessageService(msgRepo, chatRepo, hub, logger)
 	mediaService := service.NewMediaService(mediaRepo, msgRepo, chatRepo, cfg.UploadDir)
 
 	authHandler := handlers.NewAuthHandler(authService, userRepo, cfg.BaseURL, cfg.RefreshTokenTTL, cookieSecure, logger)
-	chatHandler := handlers.NewChatHandler(chatServise, logger)
+	chatHandler := handlers.NewChatHandler(chatServise, groupKeyService, hub, logger)
 	messageHandler := handlers.Newmessagehandler(messageService, logger)
 	mediaHandler := handlers.NewMediahandler(mediaService, logger)
 	wsHandler := handlers.NewWSHandler(hub, jwtManager, logger)
@@ -86,6 +88,7 @@ func main() {
 	api.HandleFunc("/sessions/{id}", authHandler.RevokeSession).Methods("DELETE")
 
 	api.HandleFunc("/users", authHandler.SearchUsers).Methods("GET")
+	api.HandleFunc("/users/{id}/public-key", authHandler.GetUserPublicKey).Methods("GET")
 
 	api.HandleFunc("/chats/private", chatHandler.CreatePrivate).Methods("POST")
 	api.HandleFunc("/chats/group", chatHandler.CreateGroup).Methods("POST")
@@ -99,6 +102,8 @@ func main() {
 	api.HandleFunc("/chats/{chat_id}/messages", messageHandler.GetChatHistory).Methods("GET")
 	api.HandleFunc("/chats/{chat_id}/messages/{message_id}", messageHandler.EditMessage).Methods("PUT")
 	api.HandleFunc("/chats/{chat_id}/messages/{message_id}", messageHandler.DeleteMessage).Methods("DELETE")
+	api.HandleFunc("/chats/{chat_id}/group-key", chatHandler.SetGroupKey).Methods("POST")
+	api.HandleFunc("/chats/{chat_id}/group-key", chatHandler.GetGroupKey).Methods("GET")
 
 	api.HandleFunc("/media", mediaHandler.Upload).Methods("POST")
 	api.HandleFunc("/media/{media_id}", mediaHandler.Download).Methods("GET")

@@ -28,6 +28,7 @@ const Profile = {
                     <div class="profile-actions">
                         <button id="edit-profile-btn">Edit Profile</button>
                         <button id="logout-btn">Logout</button>
+                        <button id="download-key-btn">Download Private Key</button>
                         <button id="delete-account-btn" class="danger">Delete Account</button>
                     </div>
                 </div>
@@ -46,6 +47,7 @@ const Profile = {
         document.getElementById('logout-btn')?.addEventListener('click', () => {
             if (typeof logout === 'function') logout();
         });
+        document.getElementById('download-key-btn')?.addEventListener('click', () => this.DownloadPrivateKey());
         document.getElementById('delete-account-btn')?.addEventListener('click', () => this.confirmDeleteAccount());
 
         document.getElementById('load-sessions-btn')?.addEventListener('click', () => this.loadAndShowSessions());
@@ -139,6 +141,24 @@ const Profile = {
                 alert('Failed to update profile: ' + err.message);
             }
         };
+    },
+
+    async DownloadPrivateKey() {
+        const keys = await KeyStorage.loadKeys(Api.userId);
+        if (!keys) {
+            alert('No private key found');
+            return;
+        }
+        const jwkStr = await CryptoModule.exportPrivateKey(keys.privateKey);
+        const blob = new Blob([jwkStr], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'messenger_private_key.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
     },
 
     confirmDeleteAccount() {

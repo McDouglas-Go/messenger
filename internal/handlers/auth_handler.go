@@ -19,7 +19,7 @@ type userResponse struct {
 	ID              string `json:"id"`
 	Username        string `json:"username"`
 	Email           string `json:"email"`
-	DisplayName     string `json:"display_name"`
+	DisplayName     string `json:"display_name,omitempty"`
 	About           string `json:"about"`
 	ProfilePhotoURL string `json:"profile_photo_url,omitempty"`
 	CreatedAt       string `json:"created_at"`
@@ -29,7 +29,7 @@ type userResponse struct {
 type SearchUserResponse struct {
 	ID              string `json:"id"`
 	Username        string `json:"username"`
-	DisplayName     string `json:"display_name"`
+	DisplayName     string `json:"display_name,omitempty"`
 	About           string `json:"about"`
 	ProfilePhotoURL string `json:"profile_photo_url,omitempty"`
 	CreatedAt       string `json:"created_at"`
@@ -233,6 +233,29 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		h.log.Error("Failed to encode me response", "error", err)
 	}
+}
+
+func (h *AuthHandler) GetUserPublicKey(w http.ResponseWriter, r *http.Request) {
+	userID := mux.Vars(r)["id"]
+	user, err := h.userRepo.GetByID(r.Context(), userID)
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if user == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+	publicKey := ""
+	if user.PublicKey != nil {
+		publicKey = *user.PublicKey
+	}
+	resp := map[string]string{
+		"public_key": publicKey,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
 }
 
 func (h *AuthHandler) SearchUsers(w http.ResponseWriter, r *http.Request) {
