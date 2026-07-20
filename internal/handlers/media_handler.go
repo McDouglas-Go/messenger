@@ -96,3 +96,36 @@ func (h *MediaHandler) Download(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", strconv.FormatInt(media.SizeBytes, 10))
 	io.Copy(w, file)
 }
+
+func (h *MediaHandler) Update(w http.ResponseWriter, r *http.Request) {
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
+	id := mux.Vars(r)["id"]
+
+	var req struct {
+		MessageID *string `json:"message_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	if err := h.MediaService.Update(r.Context(), id, claims.UserID, req.MessageID); err != nil {
+		h.log.Error("Update media failed", "error", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *MediaHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
+	id := mux.Vars(r)["id"]
+
+	if err := h.MediaService.Delete(r.Context(), id, claims.UserID); err != nil {
+		h.log.Error("Delete media failed", "error", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

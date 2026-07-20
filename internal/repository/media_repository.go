@@ -12,6 +12,8 @@ import (
 type MediaRepository interface {
 	Create(ctx context.Context, media *model.Media) error
 	GetByID(ctx context.Context, id string) (*model.Media, error)
+	GetByMessageID(ctx context.Context, messageID string) ([]*model.Media, error)
+	Update(ctx context.Context, id string, messageID *string) error
 	Delete(ctx context.Context, id string) error
 }
 
@@ -68,6 +70,45 @@ func (r *pgMediaRepository) GetByID(ctx context.Context, id string) (*model.Medi
 	}
 
 	return m, nil
+}
+
+func (r *pgMediaRepository) GetByMessageID(ctx context.Context, messageID string) ([]*model.Media, error) {
+	query := `SELECT id, message_id, user_id, file_path, mime_type, size_bytes, uploaded_at
+              FROM media WHERE message_id = $1`
+
+	rows, err := r.pool.Query(ctx, query, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var mediaList []*model.Media
+	for rows.Next() {
+		m := &model.Media{}
+		err := rows.Scan(
+			&m.ID,
+			&m.MessageID,
+			&m.UserID,
+			&m.FilePath,
+			&m.MimeType,
+			&m.SizeBytes,
+			&m.UploadedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		mediaList = append(mediaList, m)
+	}
+	return mediaList, nil
+}
+
+func (r *pgMediaRepository) Update(ctx context.Context, id string, messageID *string) error {
+	_, err := r.pool.Exec(ctx, "UPDATE media SET message_id = $1 WHERE id = $2", messageID, id)
+	if err != nil {
+		return fmt.Errorf("update media: %w", err)
+	}
+
+	return nil
 }
 
 func (r *pgMediaRepository) Delete(ctx context.Context, id string) error {

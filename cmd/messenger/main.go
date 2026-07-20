@@ -60,7 +60,7 @@ func main() {
 	authService := service.NewAuthService(userRepo, sessionRepo, jwtManager, cfg.RefreshTokenTTL, logger)
 	chatServise := service.NewChatService(chatRepo, userRepo, msgRepo)
 	groupKeyService := service.NewGroupService(groupKeyRepo)
-	messageService := service.NewMessageService(msgRepo, chatRepo, hub, logger)
+	messageService := service.NewMessageService(msgRepo, chatRepo, mediaRepo, hub, logger)
 	mediaService := service.NewMediaService(mediaRepo, msgRepo, chatRepo, cfg.UploadDir)
 
 	authHandler := handlers.NewAuthHandler(authService, userRepo, cfg.BaseURL, cfg.RefreshTokenTTL, cookieSecure, logger)
@@ -106,7 +106,9 @@ func main() {
 	api.HandleFunc("/chats/{chat_id}/group-key", chatHandler.GetGroupKey).Methods("GET")
 
 	api.HandleFunc("/media", mediaHandler.Upload).Methods("POST")
-	api.HandleFunc("/media/{media_id}", mediaHandler.Download).Methods("GET")
+	api.HandleFunc("/media/{id}", mediaHandler.Download).Methods("GET")
+	api.HandleFunc("/media/{id}", mediaHandler.Update).Methods("PUT")
+	api.HandleFunc("/media/{id}", mediaHandler.Delete).Methods("DELETE")
 
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir(cfg.StaticDir))))
 	r.PathPrefix("/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

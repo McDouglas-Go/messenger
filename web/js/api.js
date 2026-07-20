@@ -123,5 +123,39 @@ const Api = {
     },
     deleteMessage(chatId, messageId) {
         return this.del(`/chats/${chatId}/messages/${messageId}`);
-    }
+    },
+
+    uploadFile(fileBuffer, fileName, mimeType, onProgress) {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/media', true);
+            xhr.setRequestHeader('Authorization', `Bearer ${Api.authToken}`);
+            xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable) {
+                    const percent = Math.round(e.loaded / e.total * 100);
+                    if (onProgress) onProgress(percent);
+                }
+            };
+            xhr.onload = () => {
+                if (xhr.status === 201 || xhr.status === 200) {
+                    try {
+                        const resp = JSON.parse(xhr.responseText);
+                        resolve(resp);
+                    } catch (e) {
+                        reject(new Error('Invalid server response'));
+                    }
+                } else {
+                    reject(new Error(`Upload failed with status ${xhr.status}`));
+                }
+            };
+            xhr.onerror = () => reject(new Error('Network error'));
+            xhr.onabort = () => reject(new Error('Upload aborted'));
+
+            const formData = new FormData();
+            const blob = new Blob([fileBuffer], {type: mimeType || 'application/octet-stream'});
+
+            formData.append('file', blob, fileName);
+            xhr.send(formData);
+        });
+    },
 };

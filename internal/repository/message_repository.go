@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/McDouglas-Go/messenger/internal/model"
 	"github.com/jackc/pgx/v5"
@@ -15,7 +16,7 @@ type MessageRepository interface {
 	GetLastMessage(ctx context.Context, chatID string) (*model.EncryptedMessage, error)
 	GetByID(ctx context.Context, id string) (*model.EncryptedMessage, error)
 	Update(ctx context.Context, msg *model.EncryptedMessage) error
-	Delete(ctx context.Context, id string) error
+	Delete(ctx context.Context, messageID string) error
 }
 
 type pgMessageRepository struct {
@@ -183,14 +184,40 @@ func (r *pgMessageRepository) Update(ctx context.Context, msg *model.EncryptedMe
 	return nil
 }
 
-func (r *pgMessageRepository) Delete(ctx context.Context, id string) error {
-	result, err := r.pool.Exec(ctx, "DELETE FROM messages WHERE id = $1", id)
+func (r *pgMessageRepository) Delete(ctx context.Context, messageID string) error {
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("delete message: %w", err)
+		return fmt.Errorf("begin transaction: %w", err)
 	}
-	if result.RowsAffected() == 0 {
-		return fmt.Errorf("message not found")
+	defer tx.Rollback(ctx)
+
+	var mediaList []*model.Media
+	rows, err := tx.Query(ctx, `SELECT id, file_path FROM media WHERE message_id = $1`, messageID)
+	if err != nil {
+		return fmt.Errorf("query media: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		media := &model.Media{}
+		if err := rows.Scan(&media.ID, &media.FilePath); err != nil {
+			return fmt.Errorf("scan media: %w", err)
+		}
+		mediaList = append(mediaList, media)
 	}
 
-	return nil
+	for _, media := range mediaList {
+		if err := os.Remove(media.FilePath); err != nil {
+			return fmt.Errorf("failed to remove media file %s: %v", media.FilePath, err)
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM media WHERE message_id = $1`, messageID); err != nil {
+		return fmt.Errorf("delete media records: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM messages WHERE id = $1`, messageID); err != nil {
+		return fmt.Errorf("delete message: %w", err)
+	}
+
+	return tx.Commit(ctx)
 }

@@ -5,6 +5,8 @@ const Chats = {
     currentChatDetail: null,
     currentChatSharedKey: null,
     chatKeys: {},
+    mediaProcessed: new Set(),
+    mediaUrlCache: new Map(),
 
     async init() {
         await this.loadChats();
@@ -42,28 +44,7 @@ const Chats = {
                 title = chat.name;
             }
 
-            let lastMsgText = '...';
-            if (chat.last_message) {
-                let plain = '';
-                const key = this.chatKeys[chat.id];
-                if (key) {
-                    try {
-                        const packed = CryptoModule.unpackEncryptedData(chat.last_message);
-                        plain = await CryptoModule.decrypt(key, packed);
-                    } catch (e) {
-                        plain = ' ';
-                    }
-                } else {
-                    plain = ' ';
-                }
-                if (chat.last_message.sender_id === Api.userId) {
-                    lastMsgText = 'You: ' + plain;
-                } else if (chat.type === 'group') {
-                    lastMsgText = chat.sender_name + ': ' + plain;
-                } else {
-                    lastMsgText = plain;
-                }
-            }
+            let lastMsgText = await this.formatLastMessage(chat);
 
             li.innerHTML = `
                 <div class="chat-avatar"></div>
@@ -79,13 +60,64 @@ const Chats = {
             list.appendChild(li);
         }
     },
+
+    async formatLastMessage(chat) {
+        if (!chat.last_message) return '...';
+        let plain = '';
+        const key = this.chatKeys[chat.id];
+        if (key) {
+            try {
+                const packed = CryptoModule.unpackEncryptedData(chat.last_message);
+                plain = await CryptoModule.decrypt(key, packed);
+            } catch (e) {
+                plain = ' ';
+            }
+        } else {
+            plain = ' ';
+        }
+        if (chat.last_message.content_type !== 'text' && plain.startsWith('{') && plain.includes('media_ids')) {
+            try {
+                const mediaData = JSON.parse(plain);
+                const mediaTypes = mediaData.media_types || [];
+                const text = mediaData.text || '';
+                let icon = '📎';
+                if (mediaTypes.length > 0) {
+                    const mime = mediaTypes[0];
+                    if (mime.startsWith('image/')) icon = '📷 Image';
+                    else if (mime.startsWith('video/')) icon = '🎬 Video';
+                    else icon = '📄 File';
+                }
+                if (text.trim() !== '') {
+                    return icon + ' · ' + text; 
+                } else {
+                    return icon;
+                }
+            } catch (e) {
+                return ' ';
+            }
+        }
+
+        if (chat.last_message.sender_id === Api.userId) {
+            return 'You: ' + plain;
+        } else if (chat.type === 'group') {
+            return chat.sender_name + ': ' + plain;
+        } else {
+            return plain;
+        }
+    },
+
+    hideChatSidebar() {
+        const sidebar = document.getElementById('chat-info-sidebar');
+        if (sidebar) sidebar.style.display = 'none';
+    },
+
     async selectChat(chatId) {
+        this.mediaProcessed.clear();
         if (this.currentChatId === chatId) return;
         this.currentChatId = chatId;
         this.currentChatSharedKey = null;
         await this.renderChatList();
-        const sidebar = document.getElementById('chat-info-sidebar');
-        if (sidebar) sidebar.style.display = 'none';
+        this.hideChatSidebar();
         await this.loadChatDetail(chatId);
         await this.loadMessages(chatId);
     },
@@ -228,7 +260,7 @@ const Chats = {
         const sidebar = document.getElementById('chat-info-sidebar');
         if (!sidebar) return;
         if (sidebar.style.display === 'none') {
-            sidebar.style.display = '';
+            sidebar.style.display = 'flex';
         }
         const { chat, members, current_role } = this.currentChatDetail;
         let contentHtml = '';
@@ -360,6 +392,7 @@ const Chats = {
     async leaveChat() {
         if (!confirm('Are you sure you want to leave this chat?')) return;
         try {
+            this.mediaProcessed.clear();
             await Api.del(`/chats/${this.currentChatId}/members`, { user_id: Api.userId });
         } catch (err) {
             alert('Failed to leave chat: ' + err.message);
@@ -568,6 +601,8 @@ const Chats = {
                 <div id="messages-list"></div>
                 <div id="typing-indicator" class="typing-indicator" style="display:none;"></div>
                 <form id="message-form">
+                    <input type="file" id="file-input" accept="image/*,video/*,.pdf,.doc,.docx" style="display:none" multiple>
+                    <button type="button" id="attach-btn" title="Attach file">📎</button>
                     <input type="text" id="message-input" placeholder="Write a message…" autocomplete="off">
                     <button type="submit">Send</button>
                 </form>
@@ -576,6 +611,18 @@ const Chats = {
 
         const list = document.getElementById('messages-list');
         messages.forEach(msg => this.appendMessage(msg, list));
+        const attachBtn = document.getElementById('attach-btn');
+        const fileInput = document.getElementById('file-input');
+
+        if (attachBtn && fileInput) {
+            attachBtn.addEventListener('click', () => {
+                fileInput.click();
+            });
+            fileInput.addEventListener('change', () => {
+                this.handleFilesSelect(fileInput.files);
+            });
+        }
+
         const msgInput = document.getElementById('message-input');
         const sendBtn = document.querySelector('#message-form button');
 
@@ -633,6 +680,80 @@ const Chats = {
         if (list) list.scrollTop = list.scrollHeight;
     },
 
+    handleFilesSelect(fileList) {
+        if (!fileList || fileList.length === 0) return;
+
+        let previewContainer = document.getElementById('media-preview');
+        if (!previewContainer) {
+            previewContainer = document.createElement('div');
+            previewContainer.id = 'media-preview';
+            previewContainer.className = 'media-preview';
+            const messagesContainer = document.getElementById('messages-container');
+            const form = document.getElementById('message-form');
+            if (messagesContainer && form) {
+                messagesContainer.insertBefore(previewContainer, form);
+            }
+        }
+        previewContainer.innerHTML = '';
+
+        for (const file of fileList) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const div = document.createElement('div');
+                div.className = 'preview-item';
+                if (file.type.startsWith('image/')) {
+                    const img = document.createElement('img');
+                    img.src = e.target.result;
+                    img.className = 'preview-thumb';
+                    div.appendChild(img);
+                } else if (file.type.startsWith('video/')) {
+                    const video = document.createElement('video');
+                    video.src = e.target.result;
+                    video.className = 'preview-thumb';
+                    video.autoplay = true;
+                    video.muted = true;
+                    video.loop = true;
+                    div.appendChild(video);
+                } else {
+                    const icon = document.createElement('div');
+                    icon.className = 'file-icon';
+                    icon.textContent = '📄 ' + file.name;
+                    div.appendChild(icon);
+                }
+
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'file-name';
+                nameSpan.textContent = file.name;
+                nameSpan.style.display = 'none';
+                div.appendChild(nameSpan);
+
+                const progressContainer = document.createElement('div');
+                progressContainer.className = 'progress-container';
+                progressContainer.innerHTML = '<div class="progress-bar" style="width:0%"></div>';
+                div.appendChild(progressContainer);
+
+                const removeBtn = document.createElement('button');
+                removeBtn.className = 'remove-preview';
+                removeBtn.innerHTML = '✕';
+                removeBtn.onclick = () => {
+                    div.remove();
+                    if (previewContainer.children.length === 0) {
+                        previewContainer.remove();
+                    }
+                    const fileInput = document.getElementById('file-input');
+                    fileInput.value = '';
+                };
+                div.appendChild(removeBtn);
+                previewContainer.appendChild(div);
+            };
+            reader.readAsDataURL(file);
+        }
+        const sendBtn = document.querySelector('#message-form button[type="submit"]');
+        const msgInput = document.getElementById('message-input');
+        if (sendBtn) sendBtn.disabled = false;
+        if (msgInput) msgInput.disabled = false;
+    },
+
     appendMessage(msg, container = null) {
         if (!container) container = document.getElementById('messages-list');
         if (!container) return;
@@ -641,6 +762,25 @@ const Chats = {
         const isOwn = (Api.userId && msg.sender_id === Api.userId);
         div.className = 'message ' + (isOwn ? 'own' : '');
         div.setAttribute('data-message-id', msg.id);
+
+        let mediaHtml = '';
+        let displayText = '';
+        if (['image', 'video', 'file'].includes(msg.content_type)) {
+            if (msg.text && msg.text.startsWith('{') && msg.text.includes('media_ids')) {
+                try {
+                    const mediaData = JSON.parse(msg.text);
+                    if (mediaData.media_ids && mediaData.media_ids.length > 0) {
+                        mediaHtml = this._renderMediaPreview(mediaData);
+                        displayText = mediaData.text;
+                    }
+                } catch (e) {
+                    console.error('Failed to parse media metadata', e);
+                    displayText = '';
+                }
+            } else {
+                mediaHtml = '<div class="media-attachment">📎 Media attachment</div>';
+            }
+        } else displayText = msg.text;
 
         const timeStr = new Date(msg.sent_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         let editedStr = '';
@@ -655,19 +795,139 @@ const Chats = {
         }
         div.innerHTML = `
             ${senderName ? `<div class="sender-name">${escapeHtml(senderName)}</div>` : ''}
-            <div class="message-content">${escapeHtml(msg.text || '')}</div>
+            ${mediaHtml}
+            ${displayText ? `<div class="message-content">${escapeHtml(displayText)}</div>` : ''}
             <div class="message-meta">
                 <span class="message-time">${timeStr}</span>
                 ${editedStr}
             </div>
         `;
 
-        if (msg.sender_id === Api.userId) {
-            div.addEventListener('contextmenu', (e) => this.showContextMenu(e, msg));
+        if (mediaHtml && this.currentChatSharedKey && !this.mediaProcessed.has(msg.id)) {
+            this.mediaProcessed.add(msg.id);
+            this._decryptAndDisplayMedia(div, msg, this.currentChatSharedKey);
         }
+
+        div.addEventListener('contextmenu', (e) => this.showContextMenu(e, msg));
 
         container.appendChild(div);
         return div;
+    },
+
+    async downloadAndDecryptFile(mediaId, mimeType, key) {
+        const cacheKey = `${mediaId}:${mimeType || 'default'}`;
+        if (this.mediaUrlCache.has(cacheKey)) {
+            return this.mediaUrlCache.get(cacheKey);
+        }
+        const response = await fetch(`/media/${mediaId}`, {
+            headers: { 'Authorization': `Bearer ${Api.authToken}` }
+        });
+        if (!response.ok) throw new Error('Failed to download file');
+
+        const encryptedBuffer = await response.arrayBuffer();
+        if (key) {
+            const combined = new Uint8Array(encryptedBuffer);
+            const nonce = combined.slice(0, 12).buffer;
+            const ciphertext = combined.slice(12).buffer;
+            const plainBuffer = await crypto.subtle.decrypt(
+                { name: 'AES-GCM', iv: nonce },
+                key,
+                ciphertext
+            );
+            const blob = new Blob([plainBuffer], { type: mimeType || 'application/octet-stream'});
+            const url = URL.createObjectURL(blob);
+            this.mediaUrlCache.set(cacheKey, url);
+            return url;
+        }
+    },
+
+    async _decryptAndDisplayMedia(msgElement, msg, key) {
+        try {
+            const mediaIds = this._extractMediaIds(msg.text);
+            if (!mediaIds || mediaIds.length === 0) return;
+
+            let mediaTypes = [];
+            let mediaNames = [];
+            let mediaText;
+            if (msg.text && msg.text.startsWith('{')) {
+                try {
+                    const data = JSON.parse(msg.text);
+                    mediaTypes = data.media_types || [];
+                    mediaNames = data.media_names || [];
+                    mediaText = data.text || '';
+                } catch (e) {
+                    console.error('Failed to decrypt media', e);
+                    return;
+                }
+            }
+
+            const urls = await Promise.all(mediaIds.map((id, idx) => {
+                const mimeType = mediaTypes[idx] || 'application/octet-stream';
+                return this.downloadAndDecryptFile(id, mimeType, key);
+            }));
+            const mediaContainer = msgElement.querySelector('.media-container');
+            if (mediaContainer) {
+                mediaContainer.innerHTML = '';
+                urls.forEach((url, idx) => {
+                    const mimeType = mediaTypes[idx] || 'application/octet-stream';
+                    const fileName = mediaNames[idx] || 'Noname file';
+                    if (mimeType.startsWith('image/')) {
+                        const img = document.createElement('img');
+                        img.src = url;
+                        img.className = 'media-preview-img';
+                        img.addEventListener('click', () => this.openMediaViewer(url, mimeType, fileName, mediaText));
+                        mediaContainer.appendChild(img);
+                    } else if (mimeType.startsWith('video/')) {
+                        const video = document.createElement('video');
+                        video.src = url;
+                        video.className = 'media-preview-video';
+                        video.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            this.openMediaViewer(url, mimeType, fileName, mediaText);
+                        })
+                        mediaContainer.appendChild(video);
+                    } else {
+                        const fileName = mediaNames[idx] || 'Noname file';
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.textContent = `📄 ${fileName}`;
+                        link.className = 'download-link';
+                        link.setAttribute('download', fileName);
+                        const fileDiv = document.createElement('div');
+                        fileDiv.className = 'file-preview';
+                        fileDiv.appendChild(link);
+                        mediaContainer.appendChild(fileDiv);
+                    }
+                });
+                const list = document.getElementById('messages-list');
+                if (list) list.scrollTop = list.scrollHeight;
+            }
+        } catch (e) {
+            console.error('Failed to decrypt media', e);
+        }
+    },
+
+    _extractMediaIds(text) {
+        if (text && text.startsWith('{')) {
+            try {
+                const data = JSON.parse(text);
+                return data.media_ids || null;
+            } catch (e) {
+                console.error('Failed to parse media JSON:', e);
+                return;
+            }
+        }
+        return null;
+    },
+
+    _renderMediaPreview(mediaData) {
+        const ids = mediaData.media_ids || [];
+        if (ids.length === 0) return '';
+        return `
+            <div class="media-container" data-media-ids="${ids.join(',')}">
+                <div class="media-placeholder">Decrypting media...</div>
+            </div>
+        `;
     },
 
     showContextMenu(e, msg) {
@@ -680,6 +940,30 @@ const Chats = {
         menu.className = 'context-menu';
 
         const items = [];
+
+        let textToCopy = msg.text;
+        if (['image', 'video', 'file'].includes(msg.content_type) && textToCopy.startsWith('{')) {
+            try {
+                const mediaData = JSON.parse(textToCopy);
+                textToCopy = mediaData.text;
+            } catch (e) {
+                console.error('Failed to parse text', e);
+                return;
+            }
+        }
+        if (textToCopy.trim() !== '') {
+            items.push({
+                text: 'Copy Text',
+                action: () => {
+                    navigator.clipboard.writeText(textToCopy).catch(err => console.error('Copy failed', err));
+                }
+            });
+        }
+
+        if (['image', 'video', 'file'].includes(msg.content_type)) {
+            items.push({ text: 'Download Media', action: () => this.downloadMedia(msg) });
+        }
+
         if (msg.sender_id === Api.userId) {
             items.push({ text: 'Edit', action: () => this.startEditMessage(msg) });
             items.push({ text: 'Delete', action: () => this.deleteMessage(msg) });
@@ -711,13 +995,221 @@ const Chats = {
         setTimeout(() => document.addEventListener('click', closeHandler), 0);
     },
 
+    openMediaViewer(url, mimeType, fileName, messageText = '') {
+        const lightbox = document.createElement('div');
+        lightbox.className = 'lightbox';
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'lightbox-media-wrapper';
+        lightbox.appendChild(wrapper);
+
+        let scale = 1;
+        let translateX = 0, translateY = 0;
+        let isDragging = false;
+        let startX, startY, initialTranslateX, initialTranslateY;
+        let mediaEl = null;
+
+        const updateTransform = () => {
+            mediaEl.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+        };
+
+        const handleWheel = (e) => {
+            e.preventDefault();
+            const delta = e.deltaY > 0 ? -0.1 : 0.1;
+            scale = Math.min(Math.max(0.5, scale + delta), 5);
+            if (scale <= 1) {
+                translateX = 0;
+                translateY = 0;
+            }
+            updateTransform();
+        };
+        if (mimeType.startsWith('image/')) {
+            wrapper.addEventListener('wheel', handleWheel, { passive: false });
+        }
+
+        if (mimeType.startsWith('image/')) {
+            const img = document.createElement('img');
+            img.src = url;
+            img.className = 'lightbox-img';
+            img.draggable = false;
+            mediaEl = img;
+
+            img.onload = () => {
+                const initPosition = () => {
+                    const naturalWidth = img.naturalWidth;
+                    const naturalHeight = img.naturalHeight;           
+                    wrapper.offsetHeight;    
+                    const rect = wrapper.getBoundingClientRect();
+                    
+                    if (rect.width === 0 || rect.height === 0) {
+                        requestAnimationFrame(initPosition);
+                        return;
+                    }
+
+                    const scaleX = rect.width / naturalWidth;
+                    const scaleY = rect.height / naturalHeight;
+                    scale = Math.min(scaleX, scaleY, 1);
+                    translateX = (rect.width - naturalWidth * scale) / 2;
+                    translateY = (rect.height - naturalHeight * scale) / 2;
+
+                    updateTransform();
+                };
+            };
+
+            img.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                if (scale <= 1) return;
+                isDragging = true;
+                startX = e.clientX;
+                startY = e.clientY;
+                initialTranslateX = translateX;
+                initialTranslateY = translateY;
+            });
+
+            window.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                translateX = initialTranslateX + (e.clientX - startX);
+                translateY = initialTranslateY + (e.clientY - startY);
+                updateTransform();
+            });
+
+            window.addEventListener('mouseup', () => {
+                if (isDragging) isDragging = false;
+            });
+
+            wrapper.appendChild(img);
+        } else if (mimeType.startsWith('video/')) {
+            const video = document.createElement('video');
+            video.src = url;
+            video.controls = true;
+            video.className = 'lightbox-video';
+            mediaEl = video;
+            wrapper.appendChild(video);
+        }
+
+        const controls = document.createElement('div');
+        controls.className = 'lightbox-controls';
+        let buttonsHtml = `
+            <button id="lightbox-download" title="Download">
+                <svg width="20" height="20" viewBox="0 0 24 24"><path fill="white" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+            </button>
+        `;
+        if (mimeType.startsWith('image/')) {
+            buttonsHtml += `
+                <button id="lightbox-zoomin" title="Zoom In">+</button>
+                <button id="lightbox-zoomout" title="Zoom Out">-</button>
+            `;
+        }
+        if (messageText && messageText.trim() !== '') {
+            buttonsHtml += `
+                <button id="lightbox-toggle-text" title="Show text">☱</button>
+            `;
+        }
+        buttonsHtml += `<button id="lightbox-close" title="Close">✕</button>`;
+        controls.innerHTML = buttonsHtml;
+        lightbox.appendChild(controls);
+
+        let textOverlay = null;
+        if (messageText && messageText.trim() !== '') {
+            textOverlay = document.createElement('div');
+            textOverlay.className = 'lightbox-text-overlay';
+            textOverlay.textContent = messageText;
+            textOverlay.style.display = 'none';
+            lightbox.appendChild(textOverlay);
+        }
+
+        document.body.appendChild(lightbox);
+
+        document.getElementById('lightbox-download').onclick = (e) => {
+            e.stopPropagation();
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName || 'media';
+            a.click();
+        };
+        if (mimeType.startsWith('image/')) {
+            document.getElementById('lightbox-zoomin').onclick = (e) => {
+                e.stopPropagation();
+                scale = Math.min(scale + 0.5, 5);
+                updateTransform();
+            };
+            document.getElementById('lightbox-zoomout').onclick = (e) => {
+                e.stopPropagation();
+                scale = Math.max(scale - 0.5, 0.5);
+                if (scale <= 1) {
+                    translateX = 0;
+                    translateY = 0;
+                }
+                updateTransform();
+            };
+        }
+
+        if (textOverlay) {
+            document.getElementById('lightbox-toggle-text').onclick = (e) => {
+                e.stopPropagation();
+                if (textOverlay.style.display === 'none') {
+                    textOverlay.style.display = 'block';
+                } else {
+                    textOverlay.style.display = 'none';
+                }
+            }
+        }
+        
+        document.getElementById('lightbox-close').onclick = () => lightbox.remove();
+        lightbox.addEventListener('click', (e) => {
+            if (e.target === lightbox) lightbox.remove();
+        });
+    },
+
     async sendMessage() {
         const input = document.getElementById('message-input');
         const text = input.value.trim();
-        if (!text || !this.currentChatId) return;
+        const fileInput = document.getElementById('file-input');
+        const files = fileInput?.files;
+
+        if (!text && files.length === 0 || !this.currentChatId) return;
+
+        const mediaIds = [];
+        const mediaTypes = [];
+        const mediaNames = [];
+        if (files && files.length > 0) {
+            const sendBtn = document.querySelector('#message-form button[type="submit"]');
+            if (sendBtn) sendBtn.disabled = true;
+            for (const file of files ) {
+                try {
+                    const buffer = await file.arrayBuffer();
+                    let encryptedBuffer = buffer;
+                    if (this.currentChatSharedKey) {
+                        const enc = await CryptoModule.encryptBuffer(this.currentChatSharedKey, buffer);
+                        const combined = new Uint8Array(enc.nonce.byteLength + enc.ciphertext.byteLength);
+                        combined.set(new Uint8Array(enc.nonce), 0);
+                        combined.set(new Uint8Array(enc.ciphertext), enc.nonce.byteLength);
+                        encryptedBuffer = combined.buffer;
+                    }
+
+                    const media = await Api.uploadFile(
+                        encryptedBuffer,
+                        file.name,
+                        file.type,
+                        (progress) => {
+                            this.updateFileProgress(file.name, progress);
+                        }
+                    );
+                    mediaIds.push(media.id);
+                    mediaTypes.push(file.type);
+                    mediaNames.push(file.name);
+                    this.removeFilePreview(file.name);
+                } catch (e) {
+                    alert(`Failed to upload ${file.name}: ${e.message}`);
+                    if (sendBtn) sendBtn.disabled = false;
+                    return;
+                }
+            }
+            if (sendBtn) sendBtn.disabled = false;
+        }
 
         let encryptedContent, nonce;
-        if (this.currentChatSharedKey) {
+        if (text && this.currentChatSharedKey) {
             try {
                 const enc = await CryptoModule.encrypt(this.currentChatSharedKey, text);
                 const packed = CryptoModule.packEncryptedData(enc);
@@ -728,11 +1220,99 @@ const Chats = {
                 return;
             }
         }
+
+        let contentType = 'text';
+        if (mediaIds.length > 0) {
+            const firstFile = files[0];
+            if (firstFile.type.startsWith('image/')) contentType = 'image';
+            else if (firstFile.type.startsWith('video/')) contentType = 'video';
+            else contentType = 'file';
+            const payload = {
+                text: text || ' ',
+                media_ids: mediaIds,
+                media_types: mediaTypes,
+                media_names: mediaNames,
+            };
+            if (this.currentChatSharedKey) {
+                const enc = await CryptoModule.encrypt(this.currentChatSharedKey, JSON.stringify(payload));
+                const packed = CryptoModule.packEncryptedData(enc);
+                encryptedContent = packed.encrypted_content;
+                nonce = packed.nonce;
+            }
+        }
         try {
-            await Api.sendMessage(this.currentChatId, encryptedContent, nonce, 'text');
+            const sentMessage = await Api.sendMessage(this.currentChatId, encryptedContent, nonce, contentType);
+            if (sentMessage && sentMessage.id && mediaIds.length > 0) {
+                for (const mediaId of mediaIds) {
+                    await Api.put(`/media/${mediaId}`, { message_id: sentMessage.id });
+                }
+            }
             input.value = '';
+            const previewContainer = document.getElementById('media-preview');
+            if (previewContainer) previewContainer.innerHTML = '';
+            if (fileInput) fileInput.value = '';
         } catch (err) {
             alert('Failed to send message: ' + err.message);
+        }
+    },
+
+    updateFileProgress(fileName, percent) {
+        const previewItems = document.querySelectorAll('.preview-item');
+        previewItems.forEach(item => {
+            const nameSpan = item.querySelector('.file-name');
+            if (nameSpan && nameSpan.textContent === fileName) {
+                const bar = item.querySelector('.progress-bar');
+                if (bar) {
+                    bar.style.width = percent + '%';
+                    bar.textContent = percent + '%';
+                }
+            }
+        });
+    },
+
+    removeFilePreview(fileName) {
+        const previewItems = document.querySelectorAll('.preview-item');
+        previewItems.forEach(item => {
+            const nameSpan = item.querySelector('.file-name');
+            if (nameSpan && nameSpan.textContent === fileName) {
+                item.remove();
+            }
+        });
+        const container = document.getElementById('media-preview');
+        if (container && container.children.length === 0) {
+            container.remove();
+        }
+    },
+
+    async downloadMedia(msg) {
+        try {
+            const mediaIds = this._extractMediaIds(msg.text);
+            if (!mediaIds || mediaIds.length === 0) throw new Error('No media IDs');
+
+            let mediaTypes = [];
+            let mediaNames = [];
+            if (msg.text && msg.text.startsWith('{')) {
+                try {
+                    const data = JSON.parse(msg.text);
+                    mediaTypes = data.media_types;
+                    mediaNames = data.media_names;
+                } catch (e) {
+                    console.error('Failed to parse text', e);
+                    return;
+                }
+            }
+            for (let i = 0; i < mediaIds.length; i++) {
+                const mimeType = mediaTypes[i] || 'application/octet-stream';
+                const fileName = mediaNames[i] || 'Noname file';
+                const url = await this.downloadAndDecryptFile(mediaIds[i], mimeType, this.currentChatSharedKey);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fileName;
+                a.click();
+                await new Promise(resolve => setTimeout(resolve, 300));
+            }
+        } catch (err) {
+            alert('Failed to download media: ' + err.message);
         }
     },
 
@@ -741,7 +1321,22 @@ const Chats = {
         if (!msgDiv) return;
 
         const contentDiv = msgDiv.querySelector('.message-content');
-        const oldText = msg.text || '';
+        let oldText = msg.text;
+        let mediaData = {
+            text: '',
+            media_ids: [],
+            media_types: [],
+            media_names: [],
+        }
+        if (['image', 'video', 'file'].includes(msg.content_type) && oldText.startsWith('{')) {
+            try {
+                mediaData = JSON.parse(oldText);
+                oldText = mediaData.text;
+            } catch (e) {
+                console.error('Failed to parse oldText', e);
+                return;
+            }
+        }
         contentDiv.innerHTML = `<input type="text" class="edit-input" value="${escapeHtml(oldText)}">`;
         const input = contentDiv.querySelector('.edit-input');
         input.focus();
@@ -752,10 +1347,19 @@ const Chats = {
                 contentDiv.textContent = oldText;
                 return;
             }
+            let newPayload;
+            if (['image', 'video', 'file'].includes(msg.content_type)) {
+                newPayload = JSON.stringify({
+                    ...mediaData,
+                    text: newText || ''
+                });
+            } else {
+                newPayload = newText;
+            }
             let encryptedContent, nonce;
             if (this.currentChatSharedKey) {
                 try {
-                    const enc = await CryptoModule.encrypt(this.currentChatSharedKey, newText);
+                    const enc = await CryptoModule.encrypt(this.currentChatSharedKey, newPayload);
                     const packed = CryptoModule.packEncryptedData(enc);
                     encryptedContent = packed.encrypted_content;
                     nonce = packed.nonce;
@@ -765,10 +1369,12 @@ const Chats = {
                 }
             }
             try {
-                await Api.editMessage(this.currentChatId, msg.id, encryptedContent, nonce, 'text');
+                await Api.editMessage(this.currentChatId, msg.id, encryptedContent, nonce, msg.content_type);
+                msg.text = newPayload;
             } catch (err) {
                 alert('Failed to edit message: ' + err.message);
                 contentDiv.textContent = oldText;
+                msg.text = oldText;
             }
         };
         input.addEventListener('keydown', (e) => {
@@ -973,13 +1579,21 @@ const Chats = {
     onNewMessage(msg) {
         this.loadChats();
         if (this.currentChatId !== msg.chat_id) return;
-        if(this.currentChatSharedKey) {
+
+        const key = this.chatKeys[msg.chat_id] || this.currentChatSharedKey;
+        let plainText = null;
+        if(key) {
             const packed = CryptoModule.unpackEncryptedData(msg);
-            CryptoModule.decrypt(this.currentChatSharedKey, packed).then(plain => {
+            CryptoModule.decrypt(key, packed).then(plain => {
                 msg.text = plain;
                 this.appendMessage(msg);
                 const list = document.getElementById('messages-list');
                 if (list) list.scrollTop = list.scrollHeight;
+                if (['image', 'video', 'file'].includes(msg.content_type) && !this.mediaProcessed.has(msg.id)) {
+                    this.mediaProcessed.add(msg.id);
+                    const msgEl = document.querySelector(`.message[data-message-id="${msg.id}"]`);
+                    if (msgEl) this._decryptAndDisplayMedia(msgEl, msg, key);
+                }
             });
         }
     },
@@ -992,7 +1606,19 @@ const Chats = {
 
         const updateContent = (plainText) => {
             const contentDiv = msgDiv.querySelector('.message-content');
-            if (contentDiv) contentDiv.textContent = plainText;
+            if (contentDiv) {
+                let displayText = plainText;
+                if (['image', 'video', 'file'].includes(payload.content_type) && plainText.startsWith('{')) {
+                    try {
+                        const mediaData = JSON.parse(plainText);
+                        displayText = mediaData.text || '';
+                    } catch (e) {
+                        console.error('Failed to parse text', e);
+                        return;
+                    }
+                }
+                contentDiv.textContent = displayText;
+            }
             const timeSpan = msgDiv.querySelector('.message-time');
             if (timeSpan) timeSpan.textContent = new Date(payload.sent_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -1054,9 +1680,9 @@ const Chats = {
     },
 
     onChatRemoved(payload) {
+        this.mediaProcessed.clear();
         if (this.currentChatId === payload.chat_id) {
-            const sidebar = document.getElementById('chat-info-sidebar');
-            if (sidebar) sidebar.style.display = 'none';
+            this.hideChatSidebar();
             this.currentChatId = null;
             this.currentChatDetail = null;
             const main = document.getElementById('main');

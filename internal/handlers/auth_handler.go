@@ -214,7 +214,7 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	}
 	profilePhoto := ""
 	if user.ProfilePhotoURL != "" {
-		profilePhoto = h.baseURL + "/api/media/" + user.ProfilePhotoURL
+		profilePhoto = h.baseURL + "/media/" + user.ProfilePhotoURL
 	}
 
 	resp := userResponse{
@@ -281,7 +281,7 @@ func (h *AuthHandler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 	for _, u := range users {
 		profilePhoto := ""
 		if u.ProfilePhotoURL != "" {
-			profilePhoto = h.baseURL + "/api/media/" + u.ProfilePhotoURL
+			profilePhoto = h.baseURL + "/media/" + u.ProfilePhotoURL
 		}
 		resp = append(resp, SearchUserResponse{
 			ID:              u.ID,
@@ -330,7 +330,7 @@ func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	profilePhoto := ""
 	if user.ProfilePhotoURL != "" {
-		profilePhoto = h.baseURL + "/api/media/" + user.ProfilePhotoURL
+		profilePhoto = h.baseURL + "/media/" + user.ProfilePhotoURL
 	}
 
 	resp := userResponse{

@@ -24,18 +24,25 @@ type MesssageService interface {
 }
 
 type messageService struct {
-	msgRepo  repository.MessageRepository
-	chatRepo repository.ChatRepository
-	hub      *ws.Hub
-	logger   *slog.Logger
+	msgRepo   repository.MessageRepository
+	mediaRepo repository.MediaRepository
+	chatRepo  repository.ChatRepository
+	hub       *ws.Hub
+	logger    *slog.Logger
 }
 
-func NewMessageService(msgRepo repository.MessageRepository, chatRepo repository.ChatRepository, hub *ws.Hub, logger *slog.Logger) MesssageService {
+func NewMessageService(
+	msgRepo repository.MessageRepository,
+	chatRepo repository.ChatRepository,
+	mediaRepo repository.MediaRepository,
+	hub *ws.Hub, logger *slog.Logger,
+) MesssageService {
 	return &messageService{
-		msgRepo:  msgRepo,
-		chatRepo: chatRepo,
-		hub:      hub,
-		logger:   logger,
+		msgRepo:   msgRepo,
+		chatRepo:  chatRepo,
+		mediaRepo: mediaRepo,
+		hub:       hub,
+		logger:    logger,
 	}
 }
 

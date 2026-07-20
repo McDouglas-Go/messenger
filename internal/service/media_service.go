@@ -25,6 +25,8 @@ type MediaService interface {
 		mimeType string,
 	) (*model.Media, error)
 	Get(ctx context.Context, id, userID string) (*model.Media, error)
+	Update(ctx context.Context, id, userID string, messageID *string) error
+	Delete(ctx context.Context, id, userID string) error
 }
 
 type mediaService struct {
@@ -134,4 +136,39 @@ func (s *mediaService) Get(ctx context.Context, id, userID string) (*model.Media
 	}
 
 	return media, nil
+}
+
+func (s *mediaService) Update(ctx context.Context, id, userID string, messageID *string) error {
+	media, err := s.mediaRepo.GetByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("get media: %w", err)
+	}
+	if media == nil {
+		return fmt.Errorf("media not found")
+	}
+	if media.UserID == nil || *media.UserID != userID {
+		return errors.New("access denied")
+	}
+	return s.mediaRepo.Update(ctx, id, messageID)
+}
+
+func (s *mediaService) Delete(ctx context.Context, id, userID string) error {
+	media, err := s.mediaRepo.GetByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("get media: %w", err)
+	}
+	if media == nil {
+		return errors.New("media not found")
+	}
+	if media.MessageID == nil {
+		if media.UserID != nil && *media.UserID != userID {
+			return errors.New("access denied")
+		}
+	}
+
+	if err := os.Remove(media.FilePath); err != nil {
+		fmt.Println("failed to delete file", "path", media.FilePath, "error", err)
+	}
+
+	return s.mediaRepo.Delete(ctx, id)
 }
