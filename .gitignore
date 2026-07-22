@@ -4,6 +4,8 @@ vendor/
 /messenger.exe
 /messenger.app
 
+/uploads
+
 .env
 
 .DS_Store

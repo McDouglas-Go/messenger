@@ -188,10 +188,36 @@ body.auth-page #main {
     cursor: pointer;
     flex-shrink: 0;
 }
+.chat-header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
 
-.chat-header-info { flex: 1; }
-.chat-header-title { font-weight: 600; font-size: 16px; color: #333; }
-.chat-header-subtitle { font-size: 13px; color: #888; }
+.chat-header-info {
+    cursor: pointer;
+}
+.chat-header-title { 
+    font-weight: 600; 
+    font-size: 16px; 
+    color: #333; 
+}
+.chat-header-subtitle { 
+    font-size: 13px; 
+    color: #888; 
+}
+.icon-btn {
+    background: none;
+    border: none;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    color: #666;
+}
+.icon-btn:hover {
+    background: #e0e0e0;
+}
 
 /* messages */
 
@@ -266,6 +292,15 @@ body.auth-page #main {
     margin-bottom: 4px;
 }
 
+.date-separator {
+    text-align: center;
+    margin: 16px 0;
+    font-size: 13px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
 /* message form */
 
 #message-form {
@@ -285,17 +320,59 @@ body.auth-page #main {
     font-size: 14px;
 }
 
-#message-form button {
+.send-btn-container {
+    width: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     margin-left: 10px;
-    padding: 10px 20px;
-    border: none;
-    border-radius: 20px;
-    background: #4a90d9;
-    color: white;
-    cursor: pointer;
 }
 
-#message-form button:hover { background: #357abd; }
+#send-message-btn {
+    background: #4a90d9;
+    border: none;
+    border-radius: 50%;
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform 0.3s ease;
+    transform: scale(0);
+    pointer-events: none;
+}
+#send-message-btn.visible {
+    transform: scale(1);
+    pointer-events: auto;
+    animation: popIn 0.3s ease;
+}
+#send-message-btn svg {
+    width: 18px;
+    height: 18px;
+    fill: white;
+}
+
+@keyframes popIn {
+    0% {transform: scale(0);}
+    70% {transform: scale(1.2);}
+    100% {transform: scale(1);}
+}
+.send-btn-container.visible #send-message-btn {
+    animation: popIn 0.3s ease;
+}
+
+#attach-btn {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 5px 10px;
+    border-radius: 50%;
+}
+#attach-btn:hover {
+    background: #e0e0e0;
+}
 
 /* typing */
 .typing-indicator {
@@ -308,17 +385,28 @@ body.auth-page #main {
 /* right panel */
 
 #chat-info-sidebar {
-    width: 0;
-    overflow: hidden;
+    position: fixed;
+    top: 0;
+    right: -300px;
+    width: 300px;
+    height: 100%;
     background: white;
-    border-left: 1px solid #ddd;
-    transition: width 0.3s ease;
-    flex-shrink: 0;
+    box-shadow: -2px 0 5px rgba(0,0,0,0.1);
+    transition: right 0.3s ease;
+    z-index: 1000;
     display: flex;
     flex-direction: column;
 }
 
-#chat-info-sidebar.open { width: 300px;}
+#chat-info-sidebar.open { 
+    right: 0;
+}
+
+#toggle-sidebar-btn {
+    position: relative;
+    transition: transform 0.3s ease;
+    z-index: 1001;
+}
 
 .sidebar-header {
     display: flex;
@@ -326,15 +414,8 @@ body.auth-page #main {
     padding: 8px;
 }
 
-.close-sidebar {
-    background: none;
-    border: none;
-    font-size: 24px;
-    cursor: pointer;
-    color: #888;
-}
-
 .sidebar-content {
+    margin-top: 40px;
     flex: 1;
     overflow-y: auto;
     padding: 16px;
@@ -468,21 +549,21 @@ body.auth-page #main {
 }
 
 #generate-keys-btn {
-    background: #4a90d9;
-    color: white;
-}
-
-#upload-key-btn {
     background: #e0e0e0;
     color: #333;
 }
 
+#upload-key-btn {
+    background: #4a90d9;
+    color: white;
+}
+
 #generate-keys-btn:hover {
-    background: #357abd;
+    background: #9b9d9f;
 }
 
 #upload-key-btn:hover {
-    background: #ccc;
+    background: #357abd;
 }
 
 /* context menu */
@@ -912,7 +993,6 @@ body.auth-page #main {
     max-width: 300px;
     max-height: 300px;
     border-radius: 8px;
-    cursor: pointer;
     margin: 5px;
 }
 
@@ -920,6 +1000,23 @@ body.auth-page #main {
     max-width: 300px;
     border-radius: 8px;
     margin: 5px;
+}
+
+.video-preview-wrapper {
+    position: relative;
+    display: inline-block;
+}
+.play-icon {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 0;
+    height: 0;
+    border-style: solid;
+    border-width: 15px 0 15px 30px;
+    border-color: transparent transparent transparent white;
+    pointer-events: none;
 }
 
 .download-link {
@@ -964,7 +1061,9 @@ body.auth-page #main {
     max-width: 90%;
     max-height: 90%;
     object-fit: contain;
+    pointer-events: auto;
 }
+
 .lightbox-controls {
     position: absolute;
     bottom: 20px;

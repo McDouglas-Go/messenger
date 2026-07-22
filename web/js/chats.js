@@ -106,11 +106,6 @@ const Chats = {
         }
     },
 
-    hideChatSidebar() {
-        const sidebar = document.getElementById('chat-info-sidebar');
-        if (sidebar) sidebar.style.display = 'none';
-    },
-
     async selectChat(chatId) {
         this.mediaProcessed.clear();
         if (this.currentChatId === chatId) return;
@@ -244,24 +239,65 @@ const Chats = {
             subtitle = `${members.length} members`;
         }
         header.innerHTML = `
-            <div class="chat-header-info" id="chat-header-trigger">
-                <div class="chat-header-title">${escapeHtml(title)}</div>
-                <div class="chat-header-subtitle">${subtitle}</div>
+            <div class="chat-header-left">
+                <button id="back-to-chats-btn" class="icon-btn" title="Back">←</button>
+                <div class="chat-header-info">
+                    <div class="chat-header-title">${escapeHtml(title)}</div>
+                    <div class="chat-header-subtitle">${subtitle}</div>
+                </div>
             </div>
-            <div class="chat-header-actions"></div>
+            <button id="toggle-sidebar-btn" class="icon-btn" title="Chat info">❬</button>
         `;
-        document.getElementById('chat-header-trigger').addEventListener('click', () => {
-            this.showChatSidebar();
+        document.getElementById('back-to-chats-btn').onclick = () => {
+            this.currentChatId = null;
+            this.currentChatDetail = null;
+            this.hideChatSidebar();
+            const main = document.getElementById('main');
+            if (main) {
+                main.classList.remove('chat-open');
+                main.innerHTML = '<div class="chat-placeholder">Select a chat to start messaging</div>';
+            }
+            document.querySelectorAll('#chat-list .active').forEach(li => li.classList.remove('active'));
+        };
+
+        document.getElementById('toggle-sidebar-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            const sidebar = document.getElementById('chat-info-sidebar');
+            if (sidebar && sidebar.classList.contains('open')) {
+                this.hideChatSidebar();
+            } else {
+                this.showChatSidebar();
+            }
         });
+
+        document.getElementById('chat-header').onclick = () => {
+            const sidebar = document.getElementById('chat-info-sidebar');
+            if (sidebar && sidebar.classList.contains('open')) {
+                this.hideChatSidebar();
+            } else {
+                this.showChatSidebar();
+            }
+        };
+    },
+
+    updateToggleButton() {
+        const btn = document.getElementById('toggle-sidebar-btn');
+        const sidebar = document.getElementById('chat-info-sidebar');
+        if (!btn || !sidebar) return;
+
+        if (sidebar.classList.contains('open')) {
+            btn.style.transform = 'translateX(-230px)';
+            btn.textContent = '❭';
+        } else {
+            btn.style.transform = '';
+            btn.textContent = '❬';
+        }
     },
 
     showChatSidebar() {
         if (!this.currentChatDetail) return;
         const sidebar = document.getElementById('chat-info-sidebar');
         if (!sidebar) return;
-        if (sidebar.style.display === 'none') {
-            sidebar.style.display = 'flex';
-        }
         const { chat, members, current_role } = this.currentChatDetail;
         let contentHtml = '';
 
@@ -313,16 +349,16 @@ const Chats = {
         }
 
         sidebar.innerHTML = `
-            <div class="sidebar-header">
-                <button class="close-sidebar" id="close-chat-info-sidebar">&times;</button>
-            </div>
             <div class="sidebar-content">
                 ${contentHtml}
             </div>
         `;
 
-        document.getElementById('close-chat-info-sidebar').onclick = () => {
-            sidebar.classList.remove('open');
+        sidebar.classList.add('open');
+        this.updateToggleButton();
+
+        document.getElementById('toggle-sidebar-btn').onclick = () => {
+            this.hideChatSidebar();
         };
 
         if (chat.type === 'group') {
@@ -349,7 +385,14 @@ const Chats = {
                 };
             });
         }
-        sidebar.classList.add('open');
+    },
+
+    hideChatSidebar() {
+        const sidebar = document.getElementById('chat-info-sidebar');
+        if (sidebar) {
+            sidebar.classList.remove('open');
+            this.updateToggleButton();
+        }
     },
 
     async startRenameGroup() {
@@ -601,16 +644,31 @@ const Chats = {
                 <div id="messages-list"></div>
                 <div id="typing-indicator" class="typing-indicator" style="display:none;"></div>
                 <form id="message-form">
-                    <input type="file" id="file-input" accept="image/*,video/*,.pdf,.doc,.docx" style="display:none" multiple>
                     <button type="button" id="attach-btn" title="Attach file">📎</button>
-                    <input type="text" id="message-input" placeholder="Write a message…" autocomplete="off">
-                    <button type="submit">Send</button>
+                    <input type="file" id="file-input" accept="image/*,video/*,.pdf,.doc,.docx" style="display:none" multiple>
+                    <input type="text" id="message-input" placeholder="Message…" autocomplete="off" disabled>
+                    <div class="send-btn-container" id="send-btn-container">
+                        <button type="submit" id="send-message-btn" disabled>
+                            <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+                        </button>
+                    </div>
                 </form>
             </div>
         `;
 
         const list = document.getElementById('messages-list');
-        messages.forEach(msg => this.appendMessage(msg, list));
+        let lastDateLabel = null;
+        messages.forEach(msg => {
+            const currentDateLabel = this._getDateLabel(msg.sent_at);
+            if (currentDateLabel !== lastDateLabel) {
+                const sep = document.createElement('div');
+                sep.className = 'date-separator';
+                sep.textContent = currentDateLabel;
+                list.appendChild(sep);
+                lastDateLabel = currentDateLabel;
+            }
+            this.appendMessage(msg, list);
+        });
         const attachBtn = document.getElementById('attach-btn');
         const fileInput = document.getElementById('file-input');
 
@@ -620,20 +678,18 @@ const Chats = {
             });
             fileInput.addEventListener('change', () => {
                 this.handleFilesSelect(fileInput.files);
+                this.updateSendBtn();
             });
         }
 
         const msgInput = document.getElementById('message-input');
-        const sendBtn = document.querySelector('#message-form button');
 
-        if (msgInput && sendBtn) {
+        if (msgInput) {
             if (!this.currentChatSharedKey) {
                 msgInput.disabled = true;
-                sendBtn.disabled = true;
                 msgInput.placeholder = 'Waiting for encryption keys…';
             } else {
                 msgInput.disabled = false;
-                sendBtn.disabled = false;
                 msgInput.placeholder = 'Message…';
             }
         }
@@ -649,6 +705,7 @@ const Chats = {
         let typingTimer;
         if (msgInput) {
             msgInput.addEventListener('input', () => {
+                this.updateSendBtn();
                 if (!Chats.ws || Chats.ws.readyState !== WebSocket.OPEN) return;
                 Chats.ws.send(JSON.stringify({
                     event: 'typing',
@@ -678,6 +735,23 @@ const Chats = {
 
         this.renderChatHeader();
         if (list) list.scrollTop = list.scrollHeight;
+    },
+
+    updateSendBtn() {
+        const input = document.getElementById('message-input');
+        const fileInput = document.getElementById('file-input');
+        const btn = document.getElementById('send-message-btn');
+        if (!btn) return;
+
+        const hasText = input && input.value.trim().length > 0;
+        const hasFiles = fileInput && fileInput.files && fileInput.files.length > 0;
+        if (hasText || hasFiles) {
+            btn.classList.add('visible');
+            btn.disabled = false;
+        } else {
+            btn.classList.remove('visible');
+            btn.disabled = true;
+        }
     },
 
     handleFilesSelect(fileList) {
@@ -742,6 +816,7 @@ const Chats = {
                     }
                     const fileInput = document.getElementById('file-input');
                     fileInput.value = '';
+                    this.updateSendBtn();
                 };
                 div.appendChild(removeBtn);
                 previewContainer.appendChild(div);
@@ -878,6 +953,8 @@ const Chats = {
                         img.addEventListener('click', () => this.openMediaViewer(url, mimeType, fileName, mediaText));
                         mediaContainer.appendChild(img);
                     } else if (mimeType.startsWith('video/')) {
+                        const wrapper = document.createElement('div');
+                        wrapper.className = 'video-preview-wrapper';
                         const video = document.createElement('video');
                         video.src = url;
                         video.className = 'media-preview-video';
@@ -885,7 +962,11 @@ const Chats = {
                             e.stopPropagation();
                             this.openMediaViewer(url, mimeType, fileName, mediaText);
                         })
-                        mediaContainer.appendChild(video);
+                        wrapper.appendChild(video);
+                        const playIcon = document.createElement('div');
+                        playIcon.className = 'play-icon';
+                        wrapper.appendChild(playIcon);
+                        mediaContainer.appendChild(wrapper);
                     } else {
                         const fileName = mediaNames[idx] || 'Noname file';
                         const link = document.createElement('a');
@@ -928,6 +1009,32 @@ const Chats = {
                 <div class="media-placeholder">Decrypting media...</div>
             </div>
         `;
+    },
+
+    _getDateLabel(sentAt) {
+        const now = new Date();
+        const date = new Date(sentAt);
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const yeaterday = new Date(today.getTime() - 86400000);
+        const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+        if (target.getTime() === today.getTime()) return 'Today';
+        if (target.getTime() === yeaterday.getTime()) return 'Yesterday';
+
+        const months = [
+            'January', 'February', 'March', 'April', 'May', 'June',
+            'July', 'August', 'September', 'October', 'November', 'December'
+        ];
+        const day = date.getDate();
+        const month = months[date.getMonth()];
+        const year = date.getFullYear();
+
+        if (year === now.getFullYear()) {
+            return `${day} ${month}`;
+        } else {
+            return `${day} ${month} ${year}`;
+        }
+
     },
 
     showContextMenu(e, msg) {
@@ -1251,6 +1358,7 @@ const Chats = {
             const previewContainer = document.getElementById('media-preview');
             if (previewContainer) previewContainer.innerHTML = '';
             if (fileInput) fileInput.value = '';
+            this.updateSendBtn();
         } catch (err) {
             alert('Failed to send message: ' + err.message);
         }
