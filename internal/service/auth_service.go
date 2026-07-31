@@ -41,6 +41,7 @@ type UpdateProfileInput struct {
 	About           *string `json:"about,omitempty"`
 	ProfilePhotoURL *string `json:"profile_photo_url,omitempty"`
 	PublicKey       *string `json:"public_key,omitempty"`
+	RemoveAvatar    bool    `json:"remove_avatar,omitempty"`
 }
 
 type authService struct {
@@ -286,7 +287,9 @@ func (s *authService) UpdateProfile(ctx context.Context, userID string, input Up
 	if input.About != nil {
 		user.About = *input.About
 	}
-	if input.ProfilePhotoURL != nil {
+	if input.RemoveAvatar {
+		user.ProfilePhotoURL = ""
+	} else if input.ProfilePhotoURL != nil {
 		user.ProfilePhotoURL = *input.ProfilePhotoURL
 	}
 	if input.PublicKey != nil {
@@ -296,7 +299,6 @@ func (s *authService) UpdateProfile(ctx context.Context, userID string, input Up
 	if len(user.DisplayName) == 0 {
 		return nil, fmt.Errorf("%w: display_name must be between 1 and 100 characters", ErrValidation)
 	}
-
 	if err := s.userRepo.Update(ctx, user); err != nil {
 		return nil, fmt.Errorf("update user: %w", err)
 	}

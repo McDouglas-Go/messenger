@@ -18,9 +18,10 @@ type ChatWithInfo struct {
 }
 
 type UserInfo struct {
-	ID          string `json:"id"`
-	Username    string `json:"username"`
-	DisplayName string `json:"display_name"`
+	ID              string `json:"id"`
+	Username        string `json:"username"`
+	DisplayName     string `json:"display_name"`
+	ProfilePhotoURL string `json:"profile_photo_url,omitempty"`
 }
 
 type ChatDetail struct {
@@ -30,11 +31,12 @@ type ChatDetail struct {
 }
 
 type MemberInfo struct {
-	UserID      string `json:"user_id"`
-	UserName    string `json:"username"`
-	DisplayName string `json:"display_name"`
-	Role        string `json:"role"`
-	JoinetAt    string `json:"joined_at"`
+	UserID          string `json:"user_id"`
+	UserName        string `json:"username"`
+	DisplayName     string `json:"display_name"`
+	Role            string `json:"role"`
+	JoinetAt        string `json:"joined_at"`
+	ProfilePhotoUrl string `json:"profile_photo_url,omitempty"`
 }
 
 type ChatService interface {
@@ -52,10 +54,16 @@ type chatService struct {
 	chatRepo repository.ChatRepository
 	userRepo repository.UserRepository
 	msgRepo  repository.MessageRepository
+	baseURL  string
 }
 
-func NewChatService(chatRepo repository.ChatRepository, userRepo repository.UserRepository, msgRepo repository.MessageRepository) ChatService {
-	return &chatService{chatRepo: chatRepo, userRepo: userRepo, msgRepo: msgRepo}
+func NewChatService(chatRepo repository.ChatRepository, userRepo repository.UserRepository, msgRepo repository.MessageRepository, baseURL string) ChatService {
+	return &chatService{
+		chatRepo: chatRepo,
+		userRepo: userRepo,
+		msgRepo:  msgRepo,
+		baseURL:  baseURL,
+	}
 }
 
 func (s *chatService) CreatePrivate(ctx context.Context, userID1, userID2 string) (*model.Chat, error) {
@@ -154,10 +162,15 @@ func (s *chatService) GetUserChats(ctx context.Context, userID string) ([]*ChatW
 					if m.UserID != userID {
 						otherUser, err := s.userRepo.GetByID(ctx, m.UserID)
 						if err == nil && otherUser != nil {
+							profilePhotoURL := ""
+							if otherUser.ProfilePhotoURL != "" {
+								profilePhotoURL = s.baseURL + "/media/" + otherUser.ProfilePhotoURL
+							}
 							cwi.OtherUser = &UserInfo{
-								ID:          otherUser.ID,
-								Username:    otherUser.Username,
-								DisplayName: otherUser.DisplayName,
+								ID:              otherUser.ID,
+								Username:        otherUser.Username,
+								DisplayName:     otherUser.DisplayName,
+								ProfilePhotoURL: profilePhotoURL,
 							}
 						}
 						break
@@ -196,12 +209,17 @@ func (s *chatService) GetChatWithMembers(ctx context.Context, chatID, userID str
 		if m.UserID == userID {
 			currentRole = string(m.Role)
 		}
+		profilePhotoURL := ""
+		if user.ProfilePhotoURL != "" {
+			profilePhotoURL = s.baseURL + "/media/" + user.ProfilePhotoURL
+		}
 		memberInfos = append(memberInfos, &MemberInfo{
-			UserID:      m.UserID,
-			UserName:    user.Username,
-			DisplayName: user.DisplayName,
-			Role:        string(m.Role),
-			JoinetAt:    m.JoinedAt.Format("2006-01-02T15:04:05Z"),
+			UserID:          m.UserID,
+			UserName:        user.Username,
+			DisplayName:     user.DisplayName,
+			Role:            string(m.Role),
+			JoinetAt:        m.JoinedAt.Format("2006-01-02T15:04:05Z"),
+			ProfilePhotoUrl: profilePhotoURL,
 		})
 	}
 	return &ChatDetail{
@@ -366,6 +384,15 @@ func (s *chatService) DeleteChat(ctx context.Context, userID, chatID string) err
 	if chat.Type != model.ChatTypePrivate {
 		if chat.CreatedBy != userID {
 			return errors.New("only the owner can delete the chat")
+		}
+	}
+	messages, err := s.msgRepo.GetAllMessages(ctx, chatID)
+	if err != nil {
+		return fmt.Errorf("get messages: %w", err)
+	}
+	for _, message := range messages {
+		if err := s.msgRepo.Delete(ctx, message.ID); err != nil {
+			return fmt.Errorf("delete message %s: %w", message.ID, err)
 		}
 	}
 	return s.chatRepo.Delete(ctx, chatID)

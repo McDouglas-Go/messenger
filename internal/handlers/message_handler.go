@@ -24,10 +24,9 @@ func Newmessagehandler(messageService service.MesssageService, logger *slog.Logg
 }
 
 type sendMessageRequest struct {
-	EncryptedContent string  `json:"encrypted_content"` // base64
-	Nonce            string  `json:"nonce"`             // base64
-	EncryptionKeyID  *string `json:"encryption_key_id,omitempty"`
-	ContentType      string  `json:"content_type"`
+	EncryptedContent string `json:"encrypted_content"` // base64
+	Nonce            string `json:"nonce"`             // base64
+	ContentType      string `json:"content_type"`
 }
 
 type messageResponse struct {
@@ -36,17 +35,15 @@ type messageResponse struct {
 	SenderID         string  `json:"sender_id"`
 	EncryptedContent string  `json:"encrypted_content"` // base64
 	Nonce            string  `json:"nonce"`             // base64
-	EncryptionKeyID  *string `json:"encryption_key_id,omitempty"`
 	ContentType      string  `json:"content_type"`
 	SentAt           string  `json:"sent_at"`
 	EditedAt         *string `json:"edited_at,omitempty"`
 }
 
 type editMessageRequest struct {
-	EncryptedContent string  `json:"encrypted_content"`
-	Nonce            string  `json:"nonce"`
-	ContentType      string  `json:"content_type"`
-	EncryptionKeyID  *string `json:"encryption_key_id,omitempty"`
+	EncryptedContent string `json:"encrypted_content"`
+	Nonce            string `json:"nonce"`
+	ContentType      string `json:"content_type"`
 }
 
 func MessageToResponse(msg *model.EncryptedMessage) messageResponse {
@@ -56,7 +53,6 @@ func MessageToResponse(msg *model.EncryptedMessage) messageResponse {
 		SenderID:         msg.SenderID,
 		EncryptedContent: base64.StdEncoding.EncodeToString(msg.EncryptedContent),
 		Nonce:            base64.StdEncoding.EncodeToString(msg.Nonce),
-		EncryptionKeyID:  msg.EncryptionKeyID,
 		ContentType:      string(msg.ContentType),
 		SentAt:           msg.SentAt.Format(time.RFC3339),
 	}
@@ -100,7 +96,6 @@ func (h *MessageHandler) Send(w http.ResponseWriter, r *http.Request) {
 		ChatID:           chatID,
 		EncryptedContent: encryptedContent,
 		Nonce:            nonce,
-		EncryptionKeyID:  req.EncryptionKeyID,
 		ContentType:      model.ContentType(req.ContentType),
 	}
 
@@ -116,7 +111,6 @@ func (h *MessageHandler) Send(w http.ResponseWriter, r *http.Request) {
 		SenderID:         msg.SenderID,
 		EncryptedContent: req.EncryptedContent,
 		Nonce:            req.Nonce,
-		EncryptionKeyID:  msg.EncryptionKeyID,
 		ContentType:      string(msg.ContentType),
 		SentAt:           msg.SentAt.Format(time.RFC3339),
 	}
@@ -166,7 +160,6 @@ func (h *MessageHandler) GetChatHistory(w http.ResponseWriter, r *http.Request) 
 			SenderID:         msg.SenderID,
 			EncryptedContent: base64.StdEncoding.EncodeToString(msg.EncryptedContent),
 			Nonce:            base64.StdEncoding.EncodeToString(msg.Nonce),
-			EncryptionKeyID:  msg.EncryptionKeyID,
 			ContentType:      string(msg.ContentType),
 			SentAt:           msg.SentAt.Format(time.RFC3339),
 			EditedAt:         editedAt,
@@ -216,7 +209,6 @@ func (h *MessageHandler) EditMessage(w http.ResponseWriter, r *http.Request) {
 		encBytes,
 		nonceBytes,
 		model.ContentType(req.ContentType),
-		req.EncryptionKeyID,
 	)
 	if err != nil {
 		h.log.Error("EditMessage failed", "error", err)
@@ -230,7 +222,6 @@ func (h *MessageHandler) EditMessage(w http.ResponseWriter, r *http.Request) {
 		SenderID:         updatedMsg.SenderID,
 		EncryptedContent: base64.StdEncoding.EncodeToString(updatedMsg.EncryptedContent),
 		Nonce:            base64.StdEncoding.EncodeToString(updatedMsg.Nonce),
-		EncryptionKeyID:  updatedMsg.EncryptionKeyID,
 		ContentType:      string(updatedMsg.ContentType),
 		SentAt:           updatedMsg.SentAt.Format(time.RFC3339),
 	}

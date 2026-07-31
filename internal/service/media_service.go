@@ -56,7 +56,7 @@ func (s *mediaService) Upload(
 	file multipart.File,
 	header *multipart.FileHeader,
 	messageID *string,
-	userId *string,
+	userID *string,
 	mimeType string,
 ) (*model.Media, error) {
 	randBytes := make([]byte, 16)
@@ -87,7 +87,7 @@ func (s *mediaService) Upload(
 
 	m := &model.Media{
 		MessageID: messageID,
-		UserID:    userId,
+		UserID:    userID,
 		FilePath:  destPath,
 		MimeType:  mime,
 		SizeBytes: size,

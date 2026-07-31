@@ -61,24 +61,34 @@ const Auth = {
         document.getElementById('upload-key-btn').onclick = async () => {
             Modals.hide('key-choice-modal');
             const file = await this.selectPrivateKeyFile();
-            if (file) {
-                try {
-                    const text = await file.text();
-                    const jwk = JSON.parse(text);
-                    if (!jwk.d || !jwk.x || !jwk.y) throw new Error('Invalid key');
-                    const privateKey = await CryptoModule.importPrivateKey(jwk);
-                    const publicJwkObj = await crypto.subtle.exportKey('jwk', privateKey);
-                    delete publicJwkObj.d;
-                    delete publicJwkObj.key_ops;
-                    const publicKeyJwk = JSON.stringify(publicJwkObj);
-                    await KeyStorage.saveKeys(Api.userId, JSON.stringify(jwk), publicKeyJwk);
-                    await Api.put('/me', { public_key: publicKeyJwk });
-                    resolve();
-                } catch (e) {
-                    alert('Invalid key file. Please try again.');
-                    this._showKeyChoiceModal(resolve, reject);
+            if (!file) {
+                this._showKeyChoiceModal(resolve, reject);
+                return;
+            }
+            try {
+                const text = await file.text();
+                const jwk = JSON.parse(text);
+                if (!jwk.d || !jwk.x || !jwk.y) throw new Error('Invalid key');
+                const privateKey = await CryptoModule.importPrivateKey(jwk);
+                const publicJwkObj = await crypto.subtle.exportKey('jwk', privateKey);
+                delete publicJwkObj.d;
+                delete publicJwkObj.key_ops;
+                const publicKeyJwk = JSON.stringify(publicJwkObj);
+
+                const serverKeyResp = await Api.get(`/users/${Api.userId}/public-key`);
+                if (serverKeyResp?.public_key) {
+                    const serverPublicKey = JSON.parse(serverKeyResp.public_key);
+                    if (publicJwkObj.x !== serverPublicKey.x || publicJwkObj.y !== serverPublicKey.y) {
+                        alert('This key does not belong to this account. Please load the correct key.');
+                        this._showKeyChoiceModal(resolve, reject);
+                        return;
+                    }
                 }
-            } else {
+                await KeyStorage.saveKeys(Api.userId, JSON.stringify(jwk), publicKeyJwk);
+                await Api.put('/me', { public_key: publicKeyJwk });
+                resolve();
+            } catch (e) {
+                alert('Invalid key file. Please try again.');
                 this._showKeyChoiceModal(resolve, reject);
             }
         };

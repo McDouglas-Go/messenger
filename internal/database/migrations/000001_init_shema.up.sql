@@ -40,8 +40,7 @@ CREATE TABLE messages (
     chat_id UUID NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
     sender_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     encrypted_content BYTEA NOT NULL,       
-    nonce BYTEA,                           
-    encryption_key_id UUID,          
+    nonce BYTEA,                                   
     content_type VARCHAR(20) NOT NULL DEFAULT 'text', 
     sent_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     edited_at TIMESTAMPTZ

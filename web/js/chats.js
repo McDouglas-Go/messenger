@@ -22,6 +22,20 @@ const Chats = {
         }
     },
 
+    async loadAvatar(container, userId, profilePhotoUrl) {
+        if (!container || !userId) return;
+        if (!profilePhotoUrl) {
+            container.innerHTML = '';
+            return;
+        }
+        const url = await Api.getUserAvatar(userId, profilePhotoUrl);
+        if (url) {
+            container.innerHTML = `<img src="${escapeHtml(url)}" alt="Avatar">`;
+        } else {
+            container.innerHTML = '';
+        }
+    },
+
     async renderChatList() {
         const list = document.getElementById('chat-list');
         if (!list) return;
@@ -36,10 +50,11 @@ const Chats = {
             }
 
             let title = '';
-            if (chat.type === 'private') {
-                if (chat.other_user) {
-                    title = chat.other_user.display_name || chat.other_user.username;
-                }
+            let avatarHtml = '';
+            if (chat.type === 'private' && chat.other_user) {
+                title = chat.other_user.display_name || chat.other_user.username;
+                const avatarUrl = await Api.getUserAvatar(chat.other_user.id, chat.other_user.profile_photo_url);
+                if (avatarUrl) avatarHtml = `<img src="${escapeHtml(avatarUrl)}" alt="Avatar"">`;
             } else {
                 title = chat.name;
             }
@@ -47,7 +62,7 @@ const Chats = {
             let lastMsgText = await this.formatLastMessage(chat);
 
             li.innerHTML = `
-                <div class="chat-avatar"></div>
+                <div class="chat-avatar">${avatarHtml}</div>
                 <div class="chat-info">
                     <div class="chat-title">${escapeHtml(title)}</div>
                     <div class="chat-last-msg">${escapeHtml(lastMsgText)}</div>
@@ -112,27 +127,30 @@ const Chats = {
         this.currentChatId = chatId;
         this.currentChatSharedKey = null;
         await this.renderChatList();
-        this.hideChatSidebar();
+        this.hideInfoPanel();
         await this.loadChatDetail(chatId);
         await this.loadMessages(chatId);
     },
 
     showCreateChatMenu() {
-        const html = `
-            <button id="create-private-btn">Private Chat</button>
-            <button id="create-group-btn">Group Chat</button>
-        `;
-        Modals.createModal('create-chat-menu', html);
+        const menu = document.getElementById('create-chat-dropdown');
+        if (!menu) return;
+        menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+        if (menu.children.length === 0) {
+            menu.innerHTML = `
+                <button id="create-private-btn">Private Chat</button>
+                <button id="create-group-btn">Group Chat</button>
+            `;
 
-        document.getElementById('create-private-btn').onclick = () => {
-            Modals.hide('create-chat-menu');
-            Chats.showPrivateChatCreator();
-        };
-        document.getElementById('create-group-btn').onclick = () => {
-            Modals.hide('create-chat-menu');
-            Chats.showGroupChatCreator();
-        };
-        Modals.show('create-chat-menu');
+            document.getElementById('create-private-btn').onclick = () => {
+                menu.style.display = 'none';
+                Chats.showPrivateChatCreator();
+            };
+            document.getElementById('create-group-btn').onclick = () => {
+                menu.style.display = 'none';
+                Chats.showGroupChatCreator();
+            };
+        }
     },
 
     showPrivateChatCreator() {
@@ -149,41 +167,128 @@ const Chats = {
     },
     
     showGroupChatCreator() {
-        const html = `
-            <div class="modal-content" style="max-height:none; overflow:visible;">   <!-- ← исправлено -->
-                <h3>New Group</h3>
-                <input type="text" id="group-name-input" placeholder="Name">
-                <div style="display:flex; justify-content:flex-end; margin-top:15px; gap:10px;">
-                    <button id="cancel-group-name">Cancel</button>
-                    <button id="next-group-name">Next</button>
+        const main = document.getElementById('main');
+        if (!main) return;
+        main.classList.add('chat-open');
+        main.innerHTML = `
+            <div class="chat-header-empty">
+                <div class="chat-header-left">
+                    <button id="back-from-group-create" class="icon-btn" title="Back">←</button>
+                    <span class="chat-header-title">New Group</span>
                 </div>
             </div>
+            <div class="group-create-form">
+                <input type="text" id="group-name-input" placeholder="Name" class="form-input">
+                <div id="group-members-container">
+                    <div class="member-list" id="group-members-list"></div>
+                </div>
+                <div id="add-members-search">
+                    <input type="text" id="member-search-input" placeholder="Search users...">
+                    <ul id="search-results-list"></ul>
+                </div>
+                <button id="create-group-submit" class="btn-primary">Create</button>
+            </div>
         `;
-        Modals.createModal('group-chat-modal', html);
-        Modals.show('group-chat-modal');
-        document.getElementById('cancel-group-name').onclick = () => {
-            Modals.hide('group-chat-modal');
+        const selectedMembers = new Map();
+        const nameInput = document.getElementById('group-name-input');
+        const searchInput = document.getElementById('member-search-input');
+        const resultsList = document.getElementById('search-results-list');
+        const membersList = document.getElementById('group-members-list');
+        const submitBtn = document.getElementById('create-group-submit');
+        const updateSubmitBtn = () => {
+            submitBtn.disabled = !(nameInput.value.trim() && selectedMembers.size > 0);
         };
-        document.getElementById('next-group-name').onclick = () => {
-            const name = document.getElementById('group-name-input').value.trim();
-            if (!name) {
-                alert('Enter a group name');
-                return;
+        nameInput.addEventListener('input', updateSubmitBtn);
+
+        const renderSelected = () => {
+            membersList.innerHTML = '';
+            for (const [id, info] of selectedMembers) {
+                const li = document.createElement('li');
+                li.className =  'member-item';
+                li.innerHTML = `
+                    <div class="member-avatar"></div>
+                    <div class="member-info">
+                        <span class="member-name">${escapeHtml(info.display_name || info.username)}</span>
+                    </div>
+                    <div class="member-actions">
+                        <button class="remove-member-btn" data-user-id="${id}">⌫</button>
+                    </div>
+                `;
+                const avatarDiv = li.querySelector('.member-avatar');
+                this.loadAvatar(avatarDiv, id, info.profile_photo_url);
+                li.querySelector('.remove-member-btn').onclick = (e) => {
+                    e.stopPropagation();
+                    selectedMembers.delete(id);
+                    renderSelected();
+                    updateSubmitBtn();
+                };
+                membersList.appendChild(li);
             }
-            Modals.hide('group-chat-modal');
-            Chats.showUserPicker([Api.userId], async (selectedIds) => {
-                if (selectedIds.length === 0) {
-                    alert('Please select at least one member');
+        };
+
+        let searchTimeout;
+        searchInput.addEventListener('input', () => {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(async () => {
+                const query = searchInput.value.trim();
+                if (query.length < 2) {
+                    resultsList.innerHTML = '';
                     return;
                 }
                 try {
-                    const chat = await Api.createGroupChat(name, selectedIds);
-                    await Chats.loadChats();
-                    Chats.selectChat(chat.id);
+                    const users = await Api.get('/users?query=' + encodeURIComponent(query));
+                    resultsList.innerHTML = users
+                        .filter(u => u.id !== Api.userId && !selectedMembers.has(u.id))
+                        .map(u =>  `
+                            <li class="search-result-item" 
+                                data-user-id="${u.id}" 
+                                data-username="@${escapeHtml(u.username)}" 
+                                data-displayname="${escapeHtml(u.display_name)}"
+                                data-profile-photo="${u.profile_photo_url || ''}">
+                                <span>${escapeHtml(u.username)} (${escapeHtml(u.display_name)})</span>
+                            </li>
+                        `).join('');
+                    resultsList.querySelectorAll('li').forEach(li => {
+                        li.addEventListener('click', () => {
+                            const userId = li.dataset.userId;
+                            const username = li.dataset.username;
+                            const displayName = li.dataset.displayname;
+                            const profilePhoto = li.dataset.profilePhoto || '';
+                            selectedMembers.set(userId, { 
+                                username, 
+                                display_name: displayName,
+                                profile_photo_url: profilePhoto,
+                            });
+                            renderSelected();
+                            updateSubmitBtn();
+                            resultsList.innerHTML = '';
+                            searchInput.value = '';
+                        });
+                    });
                 } catch (err) {
-                    alert('Failed to create group: ' + err.message);
+                    console.error('User search failed:', err);
                 }
-            }, 'Add Members');
+            }, 300);
+        });
+        
+        document.getElementById('back-from-group-create').onclick = () => {
+            this.currentChatId = null;
+            this.hideInfoPanel();
+            main.innerHTML = '<div class="chat-placeholder">Select a chat to start messaging</div>';
+            main.classList.remove('chat-open');
+        };
+
+        submitBtn.onclick = async () => {
+            const name = nameInput.value.trim();
+            const memberIds = Array.from(selectedMembers.keys());
+            if (!name || memberIds.length === 0) return;
+            try {
+                const chat = await Api.createGroupChat(name, memberIds);
+                this.loadChats();
+                this.selectChat(chat.id);
+            } catch (err) {
+                alert('Failed to create group: ' + err.message);
+            }
         };
     },
 
@@ -220,19 +325,23 @@ const Chats = {
         }
     },
 
-    renderChatHeader() {
+    async renderChatHeader() {
         const header = document.getElementById('chat-header');
         if (!header || !this.currentChatDetail) return;
 
         const { chat, members, current_role } = this.currentChatDetail;
         let title = '';
         let subtitle = '';
-
+        let avatarHtml = `<div id="header-avatar" class="header-avatar"></div>`;
         if (chat.type === 'private') {
             const other = members.find(m => m.user_id !== Api.userId);
             if (other) {
                 title = other.display_name || other.username;
                 subtitle = 'last seen recently';
+                setTimeout(() => {
+                    const container = document.getElementById('header-avatar');
+                    this.loadAvatar(container, other.user_id, other.profile_photo_url);
+                }, 0);
             } 
         } else {
             title = chat.name;
@@ -241,17 +350,22 @@ const Chats = {
         header.innerHTML = `
             <div class="chat-header-left">
                 <button id="back-to-chats-btn" class="icon-btn" title="Back">←</button>
+                ${avatarHtml}
                 <div class="chat-header-info">
                     <div class="chat-header-title">${escapeHtml(title)}</div>
                     <div class="chat-header-subtitle">${subtitle}</div>
                 </div>
             </div>
-            <button id="toggle-sidebar-btn" class="icon-btn" title="Chat info">❬</button>
+            <div class="chat-header-arrow" id="chat-header-arrow">︾ ︾ ︾</div>
+            <div class="menu-wrapper">
+                <button id="chat-menu-btn" class="icon-btn menu-trigger">⋯</button>
+                <div id="chat-menu-dropdown" class="dropdown-menu"></div>
+            </div>
         `;
         document.getElementById('back-to-chats-btn').onclick = () => {
             this.currentChatId = null;
             this.currentChatDetail = null;
-            this.hideChatSidebar();
+            this.hideInfoPanel();
             const main = document.getElementById('main');
             if (main) {
                 main.classList.remove('chat-open');
@@ -260,44 +374,68 @@ const Chats = {
             document.querySelectorAll('#chat-list .active').forEach(li => li.classList.remove('active'));
         };
 
-        document.getElementById('toggle-sidebar-btn').addEventListener('click', (e) => {
-            e.stopPropagation();
-            const sidebar = document.getElementById('chat-info-sidebar');
-            if (sidebar && sidebar.classList.contains('open')) {
-                this.hideChatSidebar();
-            } else {
-                this.showChatSidebar();
-            }
-        });
+        const menuBtn = document.getElementById('chat-menu-btn');
+        const menuDropdown = document.getElementById('chat-menu-dropdown');
+        if (menuBtn && menuDropdown) {
+            menuBtn.onclick = (e) => {
+                e.stopPropagation();
+                menuDropdown.style.display = menuDropdown.style.display === 'block' ? 'none' : 'block';
+                if (menuDropdown.style.display === 'block') {
+                    const actions = [];
+                    if (chat.type === 'private') {
+                        actions.push({ text: '⚠︎ Delete Chat', action: () => this.deleteCurrentChat() });
+                    } else {
+                        if (current_role !== 'owner') {
+                            actions.push({ text: '✈ Leave Chat', action: () => this.leaveChat() });
+                        }
+                        if (current_role === 'owner') {
+                            actions.push({ text: '⚠︎ Delete Chat', action: () => this.deleteCurrentChat() });
+                        }
+                    }
+                    menuDropdown.innerHTML = actions.map(a => `<button>${a.text}</button>`).join('');
+                    menuDropdown.querySelectorAll('button').forEach((btn, index) => {
+                        btn.onclick = (e) => {
+                            e.stopPropagation();
+                            menuDropdown.style.display = 'none';
+                            actions[index].action();
+                        };
+                    });
+                }
+            };
+        }
 
-        document.getElementById('chat-header').onclick = () => {
-            const sidebar = document.getElementById('chat-info-sidebar');
-            if (sidebar && sidebar.classList.contains('open')) {
-                this.hideChatSidebar();
-            } else {
-                this.showChatSidebar();
-            }
-        };
+        document.getElementById('chat-header').onclick = () => this.toggleInfoPanel();
+        document.addEventListener('click', () => menuDropdown.style.display = 'none');
+        this.updateInfoPanelArrow();
     },
 
-    updateToggleButton() {
-        const btn = document.getElementById('toggle-sidebar-btn');
-        const sidebar = document.getElementById('chat-info-sidebar');
-        if (!btn || !sidebar) return;
-
-        if (sidebar.classList.contains('open')) {
-            btn.style.transform = 'translateX(-230px)';
-            btn.textContent = '❭';
+    toggleInfoPanel() {
+        const panel = document.getElementById('chat-info-panel');
+        if (!panel) return;
+        if (panel.classList.contains('open')) {
+            this.hideInfoPanel();
         } else {
-            btn.style.transform = '';
-            btn.textContent = '❬';
+            this.showInfoPanel();
         }
     },
 
-    showChatSidebar() {
+    updateInfoPanelArrow() {
+        const arrow = document.getElementById('chat-header-arrow');
+        const panel = document.getElementById('chat-info-panel');
+        if (!arrow || !panel) return;
+        if (panel.classList.contains('open')) {
+            arrow.textContent = '︽ ︽ ︽';
+            arrow.classList.add('open');
+        } else {
+            arrow.textContent = '︾ ︾ ︾';
+            arrow.classList.remove('open');
+        }
+    },
+
+    async showInfoPanel() {
         if (!this.currentChatDetail) return;
-        const sidebar = document.getElementById('chat-info-sidebar');
-        if (!sidebar) return;
+        const panel = document.getElementById('chat-info-panel');
+        if (!panel) return;
         const { chat, members, current_role } = this.currentChatDetail;
         let contentHtml = '';
 
@@ -306,70 +444,102 @@ const Chats = {
             if (other) {
                 contentHtml = `
                     <div class="profile-info">
-                        <div class="avatar-placeholder"></div>
+                        <div class="panel-avatar" id="panel-avatar"></div>
                         <h3>${escapeHtml(other.display_name || other.username)}</h3>
                         <p class="status">offline</p>
                         <p class="username">@${escapeHtml(other.username)}</p>
+                        ${other.about ? `<p class="about">${escapeHtml(other.about)}</p>` : ''}
                     </div>
                 `;
             } else {
-                contentHtml = '<p>User not found</p>';
+                contentHtml = '<p>Error: user not found</p>';
             }
         } else {
+            const membersListHtml = members.map(m => `
+                <li class="member-item" data-user-id="${m.user_id}">
+                    <div class="member-avatar" id="member-avatar-${m.user_id}"></div>
+                    <div class="member-info">
+                        <span class="member-name">${escapeHtml(m.display_name || m.username)}</span>
+                        <span class="member-role">${m.role}</span>
+                    </div>
+                    ${(current_role === 'owner' || current_role === 'admin') && m.user_id !== Api.userId ? `
+                        <div class="member-actions">
+                            <div class="member-actions-dropdown">
+                                <button class="member-actions-btn">⋯</button>
+                                <div class="member-actions-menu dropdown-menu" style="display:none;">
+                                    <button class="kick-member-btn" data-user-id="${m.user_id}">Remove</button>
+                                    <button class="make-admin-btn" disabled>Make Admin</button>
+                                </div>
+                            </div>
+                        </div>
+                    ` : ''}
+                </li>
+            `).join('')
             contentHtml = `
+                <button class="edit-panel-btn icon-btn" title="Edit">✎</button>
                 <div class="group-info">
+                    <div class="panel-avatar" id="panel-avatar"></div>
                     <div class="group-name-container">
                         <span class="group-name-text">${escapeHtml(chat.name)}</span>
-                        ${current_role === 'owner' || current_role === 'admin' ? 
-                            '<button class="rename-btn">Rename</button>' : ''}
                     </div>
-                    <div class="chat-actions">
-                        ${current_role === 'owner' || current_role === 'admin' ? 
-                            `<button id="add-members-btn">Add Members</button>` : ''}
-                        ${current_role !== 'owner' ? 
-                            `<button id="leave-chat-btn">Leave Chat</button>` : ''}
-                        ${current_role === 'owner' ? 
-                            `<button id="delete-chat-btn">Delete Chat</button>` : ''}
-                    </div>
-                    <h3>Members (${members.length})</h3>
-                    <ul class="member-list">
-                        ${members.map(m => `
-                            <li class="member-item" data-user-id="${m.user_id}">
-                                <div class="member-info">
-                                    <span class="member-name">${escapeHtml(m.display_name || m.username)}</span>
-                                    <span class="member-role">${m.role}</span>
-                                </div>
-                                ${(current_role === 'owner' || current_role === 'admin') && m.user_id !== Api.userId ? 
-                                    `<button class="kick-member-btn" data-user-id="${m.user_id}">Remove</button>` : ''}
-                            </li>
-                        `).join('')}
-                    </ul>
+                    <h3>
+                        Members - ${members.length}
+                        ${current_role === 'owner' || current_role === 'admin' ? `<button id="add-members-inline-btn" title="Add member">+</button>` : ''}
+                    </h3>
+                    <ul class="member-list">${membersListHtml}</ul>
                 </div>
             `;
         }
 
-        sidebar.innerHTML = `
-            <div class="sidebar-content">
-                ${contentHtml}
-            </div>
-        `;
+        panel.innerHTML = `<div class="panel-content">${contentHtml}</div>`;
+        panel.classList.add('open');
+        this.updateInfoPanelArrow();
 
-        sidebar.classList.add('open');
-        this.updateToggleButton();
+        let avatarUrl = '';
 
-        document.getElementById('toggle-sidebar-btn').onclick = () => {
-            this.hideChatSidebar();
-        };
+        if (chat.type === 'private') {
+            const other = members.find(m => m.user_id !== Api.userId);
+            if (other) {
+                const container = document.getElementById('panel-avatar');
+                this.loadAvatar(container, other.user_id, other.profile_photo_url);
+                avatarUrl = await Api.loadMediaUrl(other.profile_photo_url);
+            }
+        } else {
+            for (const m of members) {
+                const container = document.getElementById(`member-avatar-${m.user_id}`);
+                this.loadAvatar(container, m.user_id, m.profile_photo_url);
+            }
+        }
 
-        if (chat.type === 'group') {
-            const renameBtn = document.querySelector('.rename-btn');
-            if (renameBtn) {
-                renameBtn.addEventListener('click', () => this.startRenameGroup());
+        if (chat.type === 'private') {
+            const avatarImg = document.querySelector('.panel-avatar img');
+            if (avatarImg) {
+                const now = new Date();
+                const formattedDate = now.toISOString().replace(/:/g, '.').slice(0, 19);
+                const fileName = `Media_${formattedDate}.jpg`;
+                const other = members.find(m => m.user_id !== Api.userId);
+                avatarImg.style.cursor = 'pointer';
+                avatarImg.addEventListener('click', () => {
+                    Api.openMediaViewer(avatarUrl, 'image/jpeg', fileName);
+                });
+            }
+        } else {
+            const editBtn = document.querySelector('.edit-panel-btn');
+            if (editBtn) {
+                editBtn.addEventListener('click', () => this.startEditGroup());
             }
 
-            document.getElementById('add-members-btn')?.addEventListener('click', () => this.showAddMembersModal());
-            document.getElementById('leave-chat-btn')?.addEventListener('click', () => this.leaveChat());
-            document.getElementById('delete-chat-btn')?.addEventListener('click', () => this.deleteCurrentChat());
+            document.getElementById('add-members-inline-btn')?.addEventListener('click', () => this.showAddMembersModal());
+
+            document.querySelectorAll('.member-actions-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const menu = btn.nextElementSibling;
+                    if (menu) {
+                        menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+                    }
+                });
+            });
 
             document.querySelectorAll('.kick-member-btn').forEach(btn => {
                 btn.onclick = (e) => {
@@ -378,56 +548,91 @@ const Chats = {
                 };
             });
 
+            document.addEventListener('click', () => {
+                document.querySelectorAll('.member-actions-menu').forEach(menu => {
+                    menu.style.display = 'none';
+                });
+            });
+
             document.querySelectorAll('.member-item').forEach(item => {
-                item.onclick = (e) => {
-                    if (e.target.classList.contains('kick-member-btn')) return;
+                item.addEventListener('click', (e) => {
+                    if (e.target.closest('.member-actions-btn') || e.target.closest('.kick-member-btn')) return;
                     this.showUserProfile(item.dataset.userId);
-                };
+                });
             });
         }
     },
 
-    hideChatSidebar() {
-        const sidebar = document.getElementById('chat-info-sidebar');
-        if (sidebar) {
-            sidebar.classList.remove('open');
-            this.updateToggleButton();
+    hideInfoPanel() {
+        const panel = document.getElementById('chat-info-panel');
+        if (panel) {
+            panel.classList.remove('open');
+            this.updateInfoPanelArrow();
         }
     },
 
-    async startRenameGroup() {
-        const nameContainer = document.querySelector('.group-name-container');
-        if (!nameContainer) return;
+    async startEditGroup() {
+        const panel = document.getElementById('chat-info-panel');
+        if (!panel) return;
 
-        const oldName = this.currentChatDetail.chat.name;
-        nameContainer.innerHTML = `
-            <input type="text" class="inline-edit-input" value="${escapeHtml(oldName)}" id="rename-input">
-            <button id="save-rename">Save</button>
-        `;
-        const input = document.getElementById('rename-input');
+        const nameContainer = panel.querySelector('.group-name-container');
+        const nameText = panel.querySelector('.group-name-text');
+        const editBtn = panel.querySelector('.edit-panel-btn');
+        if (!nameText || !nameContainer || !editBtn) return;
+
+        const oldName = nameText.textContent.trim();
+        nameText.style.display = 'none';
+        editBtn.style.display = 'none';
+        
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'edit-group-name-input';
+        input.value = oldName;
+        nameContainer.appendChild(input);
+
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'save-panel-btn icon-btn';
+        saveBtn.textContent = '✓';
+        saveBtn.title = 'Save';
+        nameContainer.appendChild(saveBtn);
         input.focus();
-        const saveRename = async () => {
+
+        const finishEdit = async () => {
             const newName = input.value.trim();
             if (!newName || newName === oldName) {
-                nameContainer.innerHTML = `<span class="group-name-text">${escapeHtml(oldName)}</span> <button class="rename-btn">Rename</button>`;
-                document.querySelector('.rename-btn')?.addEventListener('click', () => this.startRenameGroup());
+                input.remove();
+                saveBtn.remove();
+                nameText.style.display = '';
+                editBtn.style.display = '';
                 return;
             }
             try {
                 await Api.put(`/chats/${this.currentChatId}`, { name: newName });
-                await this.loadChatDetail(this.currentChatId);
+                nameText.textContent = newName;
+                input.remove();
+                saveBtn.remove();
+                nameText.style.display = '';
+                editBtn.style.display = '';
+                this.loadChatDetail(this.currentChatId);
+                this.loadChats();
             } catch (err) {
                 alert('Failed to rename: ' + err.message);
-                nameContainer.innerHTML = `<span class="group-name-text">${escapeHtml(oldName)}</span> <button class="rename-btn">Rename</button>`;
-                document.querySelector('.rename-btn')?.addEventListener('click', () => this.startRenameGroup());
+                input.remove();
+                saveBtn.remove();
+                nameText.style.display = '';
+                editBtn.style.display = '';
             }
         };
-        document.getElementById('save-rename').onclick = saveRename;
+        saveBtn.addEventListener('click', finishEdit);
         input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') saveRename();
-            if (e.key === 'Escape') {
-                nameContainer.innerHTML = `<span class="group-name-text">${escapeHtml(oldName)}</span> <button class="rename-btn">Rename</button>`;
-                document.querySelector('.rename-btn')?.addEventListener('click', () => this.startRenameGroup());
+            if (e.key === 'Enter') {
+                   e.preventDefault();
+                finishEdit();
+            } else if (e.key === 'Escape') {
+                input.remove();
+                saveBtn.remove();
+                nameText.style.display = '';
+                editBtn.style.display = '';
             }
         });
     },
@@ -449,7 +654,7 @@ const Chats = {
             this.currentChatId = null;
             this.currentChatDetail = null;
             document.getElementById('main').innerHTML = '<div class="placeholder">Select a chat to start messaging</div>';
-            document.getElementById('chat-info-sidebar').style.display = 'none';
+            this.hideInfoPanel();
             await this.loadChats();
         } catch (err) {
              alert('Failed to delete chat: ' + err.message);
@@ -575,35 +780,60 @@ const Chats = {
         }
     },
 
-    showUserProfile(userId) {
+    async showUserProfile(userId) {
+        const panel = document.getElementById('chat-info-panel');
+        if (!panel) return;
         const member = this.currentChatDetail?.members.find(m => m.user_id === userId);
-        if (!member) {
-            alert('User info not available');
-            return;
-        }
-        const html = `
-            <div class="user-profile-modal">
-                <h3>${escapeHtml(member.display_name || '')}</h3>
-                <p><strong>Username:</strong> ${escapeHtml(member.username)}</p>
-                <p><strong>${member.role}</strong></p>
-                <p><strong>Joined:</strong> ${member.joined_at}</p>
-                <button id="send-message-to-user">Write message</button>
-                <button id="close-user-profile">Close</button>
+        if (!member) return;
+        const isSelf = userId === Api.userId;
+
+        const contentHtml = `
+            <div class="back-btn-container">
+                <button id="back-to-chat-info-btn" class="icon-btn" title="Back">←</button>
             </div>
+            <div class="profile-info">
+                <div class="panel-avatar" id="user-profile-avatar"></div>
+                <h3>${escapeHtml(member.display_name || member.username)}</h3>
+                <p class="status">offline</p>
+                <p class="username">@${escapeHtml(member.username)}</p>
+                ${member.about ? `<p class="about">${escapeHtml(member.about)}</p>` : ''}
+            </div>
+            ${!isSelf ? `
+            <div class="panel-actions">
+                <button id="write-message-btn">✉ Write</button>
+            </div>` : ''}
         `;
-        Modals.createModal('user-profile-modal', html);
-        document.getElementById('send-message-to-user').onclick = async () => {
-            Modals.hide('user-profile-modal');
-            try {
-                const chat = await Api.createPrivateChat(userId);
-                await this.loadChats();
-                this.selectChat(chat.id);
-            } catch (err) {
-                alert('Could not open chat: ' + err.message);
-            }
+        let avatarUrl = '';
+        panel.querySelector('.panel-content').innerHTML = contentHtml;
+        const container = document.getElementById('user-profile-avatar');
+        this.loadAvatar(container, member.user_id, member.profile_photo_url);
+        avatarUrl = await Api.loadMediaUrl(member.profile_photo_url);
+
+        document.getElementById('back-to-chat-info-btn').onclick = () => {
+            this.showInfoPanel();
         };
-        document.getElementById('close-user-profile').onclick = () => Modals.hide('user-profile-modal');
-        Modals.show('user-profile-modal');
+        const avatarImg = document.querySelector('.panel-avatar img');
+        if (avatarImg) {
+            const now = new Date();
+            const formattedDate = now.toISOString().replace(/:/g, '.').slice(0, 19);
+            const fileName = `Media_${formattedDate}.jpg`;
+            avatarImg.style.cursor = 'pointer';
+            avatarImg.addEventListener('click', () => {
+                Api.openMediaViewer(avatarUrl, 'image/jpeg', fileName);
+            });
+        }
+        if (!isSelf) {
+            document.getElementById('write-message-btn').onclick = async () => {
+                try {
+                    const chat = await Api.createPrivateChat(userId);
+                    this.hideInfoPanel();
+                    this.loadChats();
+                    this.selectChat(chat.id);
+                } catch (err) {
+                    alert('Could not open chat: ' + err.message);
+                }
+            };
+        }
     },
 
     async loadMessages(chatId) {
@@ -654,6 +884,7 @@ const Chats = {
                     </div>
                 </form>
             </div>
+            <div id="chat-info-panel" class="chat-info-panel"></div>
         `;
 
         const list = document.getElementById('messages-list');
@@ -833,10 +1064,27 @@ const Chats = {
         if (!container) container = document.getElementById('messages-list');
         if (!container) return;
 
-        const div = document.createElement('div');
         const isOwn = (Api.userId && msg.sender_id === Api.userId);
+        const isGroup = this.currentChatDetail && this.currentChatDetail.chat.type === 'group';
+        const wrapper = document.createElement('div');
+        wrapper.className = 'message-wrapper' + (isOwn ? ' own' : '');
+
+        if (isGroup && !isOwn) {
+            const avatarDiv = document.createElement('div');
+            avatarDiv.className = 'message-avatar';
+            avatarDiv.dataset.userId = msg.sender_id;
+            wrapper.appendChild(avatarDiv);
+
+            const member = this.currentChatDetail?.members.find(m => m.user_id === msg.sender_id);
+            if (member) {
+                this.loadAvatar(avatarDiv, msg.sender_id, member.profile_photo_url);
+            }
+        }
+
+        const div = document.createElement('div');
         div.className = 'message ' + (isOwn ? 'own' : '');
         div.setAttribute('data-message-id', msg.id);
+        div.dataset.senderId = msg.sender_id;
 
         let mediaHtml = '';
         let displayText = '';
@@ -884,8 +1132,8 @@ const Chats = {
         }
 
         div.addEventListener('contextmenu', (e) => this.showContextMenu(e, msg));
-
-        container.appendChild(div);
+        wrapper.appendChild(div);
+        container.appendChild(wrapper);
         return div;
     },
 
@@ -935,7 +1183,6 @@ const Chats = {
                     return;
                 }
             }
-
             const urls = await Promise.all(mediaIds.map((id, idx) => {
                 const mimeType = mediaTypes[idx] || 'application/octet-stream';
                 return this.downloadAndDecryptFile(id, mimeType, key);
@@ -950,7 +1197,7 @@ const Chats = {
                         const img = document.createElement('img');
                         img.src = url;
                         img.className = 'media-preview-img';
-                        img.addEventListener('click', () => this.openMediaViewer(url, mimeType, fileName, mediaText));
+                        img.addEventListener('click', () => Api.openMediaViewer(url, mimeType, fileName, mediaText));
                         mediaContainer.appendChild(img);
                     } else if (mimeType.startsWith('video/')) {
                         const wrapper = document.createElement('div');
@@ -960,10 +1207,11 @@ const Chats = {
                         video.className = 'media-preview-video';
                         video.addEventListener('click', (e) => {
                             e.stopPropagation();
-                            this.openMediaViewer(url, mimeType, fileName, mediaText);
+                            Api.openMediaViewer(url, mimeType, fileName, mediaText);
                         })
                         wrapper.appendChild(video);
                         const playIcon = document.createElement('div');
+                        playIcon.textContent = '▶';
                         playIcon.className = 'play-icon';
                         wrapper.appendChild(playIcon);
                         mediaContainer.appendChild(wrapper);
@@ -1100,172 +1348,6 @@ const Chats = {
             }
         };
         setTimeout(() => document.addEventListener('click', closeHandler), 0);
-    },
-
-    openMediaViewer(url, mimeType, fileName, messageText = '') {
-        const lightbox = document.createElement('div');
-        lightbox.className = 'lightbox';
-
-        const wrapper = document.createElement('div');
-        wrapper.className = 'lightbox-media-wrapper';
-        lightbox.appendChild(wrapper);
-
-        let scale = 1;
-        let translateX = 0, translateY = 0;
-        let isDragging = false;
-        let startX, startY, initialTranslateX, initialTranslateY;
-        let mediaEl = null;
-
-        const updateTransform = () => {
-            mediaEl.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
-        };
-
-        const handleWheel = (e) => {
-            e.preventDefault();
-            const delta = e.deltaY > 0 ? -0.1 : 0.1;
-            scale = Math.min(Math.max(0.5, scale + delta), 5);
-            if (scale <= 1) {
-                translateX = 0;
-                translateY = 0;
-            }
-            updateTransform();
-        };
-        if (mimeType.startsWith('image/')) {
-            wrapper.addEventListener('wheel', handleWheel, { passive: false });
-        }
-
-        if (mimeType.startsWith('image/')) {
-            const img = document.createElement('img');
-            img.src = url;
-            img.className = 'lightbox-img';
-            img.draggable = false;
-            mediaEl = img;
-
-            img.onload = () => {
-                const initPosition = () => {
-                    const naturalWidth = img.naturalWidth;
-                    const naturalHeight = img.naturalHeight;           
-                    wrapper.offsetHeight;    
-                    const rect = wrapper.getBoundingClientRect();
-                    
-                    if (rect.width === 0 || rect.height === 0) {
-                        requestAnimationFrame(initPosition);
-                        return;
-                    }
-
-                    const scaleX = rect.width / naturalWidth;
-                    const scaleY = rect.height / naturalHeight;
-                    scale = Math.min(scaleX, scaleY, 1);
-                    translateX = (rect.width - naturalWidth * scale) / 2;
-                    translateY = (rect.height - naturalHeight * scale) / 2;
-
-                    updateTransform();
-                };
-            };
-
-            img.addEventListener('mousedown', (e) => {
-                e.preventDefault();
-                if (scale <= 1) return;
-                isDragging = true;
-                startX = e.clientX;
-                startY = e.clientY;
-                initialTranslateX = translateX;
-                initialTranslateY = translateY;
-            });
-
-            window.addEventListener('mousemove', (e) => {
-                if (!isDragging) return;
-                translateX = initialTranslateX + (e.clientX - startX);
-                translateY = initialTranslateY + (e.clientY - startY);
-                updateTransform();
-            });
-
-            window.addEventListener('mouseup', () => {
-                if (isDragging) isDragging = false;
-            });
-
-            wrapper.appendChild(img);
-        } else if (mimeType.startsWith('video/')) {
-            const video = document.createElement('video');
-            video.src = url;
-            video.controls = true;
-            video.className = 'lightbox-video';
-            mediaEl = video;
-            wrapper.appendChild(video);
-        }
-
-        const controls = document.createElement('div');
-        controls.className = 'lightbox-controls';
-        let buttonsHtml = `
-            <button id="lightbox-download" title="Download">
-                <svg width="20" height="20" viewBox="0 0 24 24"><path fill="white" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
-            </button>
-        `;
-        if (mimeType.startsWith('image/')) {
-            buttonsHtml += `
-                <button id="lightbox-zoomin" title="Zoom In">+</button>
-                <button id="lightbox-zoomout" title="Zoom Out">-</button>
-            `;
-        }
-        if (messageText && messageText.trim() !== '') {
-            buttonsHtml += `
-                <button id="lightbox-toggle-text" title="Show text">☱</button>
-            `;
-        }
-        buttonsHtml += `<button id="lightbox-close" title="Close">✕</button>`;
-        controls.innerHTML = buttonsHtml;
-        lightbox.appendChild(controls);
-
-        let textOverlay = null;
-        if (messageText && messageText.trim() !== '') {
-            textOverlay = document.createElement('div');
-            textOverlay.className = 'lightbox-text-overlay';
-            textOverlay.textContent = messageText;
-            textOverlay.style.display = 'none';
-            lightbox.appendChild(textOverlay);
-        }
-
-        document.body.appendChild(lightbox);
-
-        document.getElementById('lightbox-download').onclick = (e) => {
-            e.stopPropagation();
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = fileName || 'media';
-            a.click();
-        };
-        if (mimeType.startsWith('image/')) {
-            document.getElementById('lightbox-zoomin').onclick = (e) => {
-                e.stopPropagation();
-                scale = Math.min(scale + 0.5, 5);
-                updateTransform();
-            };
-            document.getElementById('lightbox-zoomout').onclick = (e) => {
-                e.stopPropagation();
-                scale = Math.max(scale - 0.5, 0.5);
-                if (scale <= 1) {
-                    translateX = 0;
-                    translateY = 0;
-                }
-                updateTransform();
-            };
-        }
-
-        if (textOverlay) {
-            document.getElementById('lightbox-toggle-text').onclick = (e) => {
-                e.stopPropagation();
-                if (textOverlay.style.display === 'none') {
-                    textOverlay.style.display = 'block';
-                } else {
-                    textOverlay.style.display = 'none';
-                }
-            }
-        }
-        
-        document.getElementById('lightbox-close').onclick = () => lightbox.remove();
-        lightbox.addEventListener('click', (e) => {
-            if (e.target === lightbox) lightbox.remove();
-        });
     },
 
     async sendMessage() {
@@ -1676,6 +1758,9 @@ const Chats = {
                 case 'chat_members_changed':
                     this.onMembersChanged(payload);
                     break;
+                case 'avatar_updated':
+                    this.onAvatarUpdated(payload);
+                    break;
                 default:
                     console.warn('Unknown WS event:', event);
             }
@@ -1790,7 +1875,7 @@ const Chats = {
     onChatRemoved(payload) {
         this.mediaProcessed.clear();
         if (this.currentChatId === payload.chat_id) {
-            this.hideChatSidebar();
+            this.hideInfoPanel();
             this.currentChatId = null;
             this.currentChatDetail = null;
             const main = document.getElementById('main');
@@ -1800,18 +1885,61 @@ const Chats = {
             }
         }
         this.chats = this.chats.filter(c => c.id !== payload.chat_id);
-        this.renderChatList();
+        this.loadChats();
     },
 
     onMembersChanged(payload) {
         if (this.currentChatId !== payload.chat_id) return;
         this.loadChatDetail(this.currentChatId).then(() => {
-            const sidebar = document.getElementById('chat-info-sidebar');
-            if (sidebar && sidebar.style.display === 'flex') {
-                this.showChatSidebar();
+            const panel = document.getElementById('chat-info-panel');
+            if (panel && panel.style.display === 'flex') {
+                this.showInfoPanel();
             }
         });
-    }
+    },
+    onAvatarUpdated(payload) {
+        Api.avatarCache.delete(payload.user_id);
+        this.chats.forEach(chat => {
+            if (chat.other_user && chat.other_user.id === payload.user_id) {
+                chat.other_user.profile_photo_url = payload.profile_photo_url || null;
+            }
+            if (chat.members) {
+                chat.members.forEach(m => {
+                    if (m.user_id === payload.user_id) {
+                        m.profile_photo_url = payload.profile_photo_url || null;
+                    }
+                });
+            }
+        });
+        if (this.currentChatDetail) {
+            const member = this.currentChatDetail.members.find(m => m.user_id === payload.user_id);
+            if (member) {
+                const memberAvatarContainer = document.querySelector(`.member-item[data-user-id="${payload.user_id}"] .member-avatar`);
+                if (memberAvatarContainer) memberAvatarContainer.forEach(container => {
+                    this.loadAvatar(container, payload.user_id, payload.profile_photo_url);
+                });
+            }
+            if (this.currentChatDetail.chat.type === 'private') {
+                const other = this.currentChatDetail.members.find(m => m.user_id !== Api.userId);
+                const headerContainer = document.getElementById('header-avatar');
+                const profileAvatarContainer = document.querySelector('.panel-avatar');
+                if (other && other.user_id === payload.user_id) {
+                    if (headerContainer) {
+                        this.loadAvatar(headerContainer, payload.user_id, payload.profile_photo_url);
+                    }
+                    if (profileAvatarContainer) {
+                        this.loadAvatar(profileAvatarContainer, payload.user_id, payload.profile_photo_url);
+                    }
+                }
+            }
+        }
+
+        const msgAvatars = document.querySelectorAll(`.message[data-sender-id="${payload.user_id}"] .message-avatar`);
+        msgAvatars.forEach(container => {
+            this.loadAvatar(container, payload.user_id, payload.profile_photo_url);
+        });
+        this.renderChatList();
+    },
 };
 
 function escapeHtml(text) {

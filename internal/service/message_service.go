@@ -18,7 +18,6 @@ type MesssageService interface {
 		userID, chatID, messageID string,
 		encryptedContent, nonce []byte,
 		contentType model.ContentType,
-		encryptionKeyID *string,
 	) (*model.EncryptedMessage, error)
 	DeleteMessage(ctx context.Context, userID, chatID, messageID string) error
 }
@@ -102,7 +101,6 @@ func (s *messageService) EditMessage(ctx context.Context,
 	userID, chatID, messageID string,
 	encryptedContent, nonce []byte,
 	contentType model.ContentType,
-	encryptionKeyID *string,
 ) (*model.EncryptedMessage, error) {
 	msg, err := s.msgRepo.GetByID(ctx, messageID)
 	if err != nil {
@@ -122,7 +120,6 @@ func (s *messageService) EditMessage(ctx context.Context,
 	msg.EncryptedContent = encryptedContent
 	msg.Nonce = nonce
 	msg.ContentType = contentType
-	msg.EncryptionKeyID = encryptionKeyID
 
 	if err := s.msgRepo.Update(ctx, msg); err != nil {
 		return nil, fmt.Errorf("update message: %w", err)

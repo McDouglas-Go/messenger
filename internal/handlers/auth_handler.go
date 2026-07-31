@@ -12,6 +12,7 @@ import (
 	"github.com/McDouglas-Go/messenger/internal/middleware"
 	"github.com/McDouglas-Go/messenger/internal/repository"
 	"github.com/McDouglas-Go/messenger/internal/service"
+	"github.com/McDouglas-Go/messenger/internal/ws"
 	"github.com/gorilla/mux"
 )
 
@@ -41,31 +42,38 @@ type updateProfileRequest struct {
 	About           *string `json:"about,omitempty"`
 	ProfilePhotoURL *string `json:"profile_photo_url,omitempty"`
 	PublicKey       *string `json:"public_key,omitempty"`
+	RemoveAvatar    bool    `json:"remove_avatar,omitempty"`
 }
 
 type AuthHandler struct {
 	authService  service.AuthSerice
 	userRepo     repository.UserRepository
+	chatRepo     repository.ChatRepository
 	baseURL      string
 	refreshTTL   time.Duration
 	cookieSecure bool
+	hub          *ws.Hub
 	log          *slog.Logger
 }
 
 func NewAuthHandler(
 	authService service.AuthSerice,
 	userRepo repository.UserRepository,
+	chatRepo repository.ChatRepository,
 	baseURL string,
 	refreshTTL time.Duration,
 	cookieSecure bool,
+	hub *ws.Hub,
 	logger *slog.Logger,
 ) *AuthHandler {
 	return &AuthHandler{
 		authService:  authService,
 		userRepo:     userRepo,
+		chatRepo:     chatRepo,
 		baseURL:      baseURL,
 		refreshTTL:   refreshTTL,
 		cookieSecure: cookieSecure,
+		hub:          hub,
 		log:          logger,
 	}
 }
@@ -316,6 +324,7 @@ func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		About:           req.About,
 		ProfilePhotoURL: req.ProfilePhotoURL,
 		PublicKey:       req.PublicKey,
+		RemoveAvatar:    req.RemoveAvatar,
 	}
 
 	user, err := h.authService.UpdateProfile(r.Context(), claims.UserID, input)
@@ -331,6 +340,40 @@ func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	profilePhoto := ""
 	if user.ProfilePhotoURL != "" {
 		profilePhoto = h.baseURL + "/media/" + user.ProfilePhotoURL
+	}
+
+	if req.ProfilePhotoURL != nil || req.RemoveAvatar {
+		newUrl := ""
+		if !req.RemoveAvatar && req.ProfilePhotoURL != nil {
+			newUrl = h.baseURL + "/media/" + *req.ProfilePhotoURL
+		}
+		chats, err := h.chatRepo.GetUserchats(r.Context(), claims.UserID)
+		if err != nil {
+			h.log.Error("failed to get user chats for avatar broadcast", "error", err)
+			return
+		}
+		recipients := make(map[string]bool)
+		for _, chat := range chats {
+			members, err := h.chatRepo.GetChatMembers(r.Context(), chat.ID)
+			if err != nil {
+				continue
+			}
+			for _, m := range members {
+				if m.UserID != claims.UserID {
+					recipients[m.UserID] = true
+				}
+			}
+		}
+		event := map[string]interface{}{
+			"event": "avatar_updated",
+			"data": map[string]string{
+				"user_id":           claims.UserID,
+				"profile_photo_url": newUrl,
+			},
+		}
+		for uid := range recipients {
+			h.hub.SendToUser(uid, event)
+		}
 	}
 
 	resp := userResponse{

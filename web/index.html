@@ -11,8 +11,11 @@
     <div id="app">
         <aside id="sidebar">
             <div class="sidebar-header">
-                <button id="create-chat-btn" class="icon-btn" title="Create chat">+</button>
-                <input type="text" id="search-input" placeholder="Search users...">
+                <div class="menu-wrapper">
+                    <button id="create-chat-btn" class="icon-btn" title="Create chat">+</button>
+                    <div id="create-chat-dropdown" class="dropdown-menu"></div>
+                </div>
+                <input type="text" id="search-input" placeholder="Search...">
             </div>
             <ul id="chat-list">
             </ul>
@@ -24,7 +27,6 @@
         </aside>
         <main id="main">
         </main>
-        <aside id="chat-info-sidebar" class="sidebar right-sidebar"></aside>
     </div>
 
     <script src="/static/js/router.js"></script>

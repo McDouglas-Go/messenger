@@ -58,12 +58,12 @@ func main() {
 	hub := ws.NewHub(chatRepo, logger)
 
 	authService := service.NewAuthService(userRepo, sessionRepo, jwtManager, cfg.RefreshTokenTTL, logger)
-	chatServise := service.NewChatService(chatRepo, userRepo, msgRepo)
+	chatServise := service.NewChatService(chatRepo, userRepo, msgRepo, cfg.BaseURL)
 	groupKeyService := service.NewGroupService(groupKeyRepo)
 	messageService := service.NewMessageService(msgRepo, chatRepo, mediaRepo, hub, logger)
 	mediaService := service.NewMediaService(mediaRepo, msgRepo, chatRepo, cfg.UploadDir)
 
-	authHandler := handlers.NewAuthHandler(authService, userRepo, cfg.BaseURL, cfg.RefreshTokenTTL, cookieSecure, logger)
+	authHandler := handlers.NewAuthHandler(authService, userRepo, chatRepo, cfg.BaseURL, cfg.RefreshTokenTTL, cookieSecure, hub, logger)
 	chatHandler := handlers.NewChatHandler(chatServise, groupKeyService, hub, logger)
 	messageHandler := handlers.Newmessagehandler(messageService, logger)
 	mediaHandler := handlers.NewMediahandler(mediaService, logger)

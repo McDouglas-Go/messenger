@@ -17,7 +17,6 @@ type EncryptedMessage struct {
 	SenderID         string      `json:"sender_id"`
 	EncryptedContent []byte      `json:"encrypted_content"`
 	Nonce            []byte      `json:"nonce"`
-	EncryptionKeyID  *string     `json:"encryption_key_id,omitempty"`
 	ContentType      ContentType `json:"content_type"`
 	SentAt           time.Time   `json:"sent_at"`
 	EditedAt         *time.Time  `json:"edited_at,omitempty"`
