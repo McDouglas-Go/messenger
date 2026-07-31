@@ -10,6 +10,7 @@ import (
 type GroupService interface {
 	SetKey(ctx context.Context, chatID, userID string, encryptedKey []byte, version int) error
 	GetKey(ctx context.Context, chatID, userID string) (*model.GroupEncryptionKey, error)
+	DeleteKey(ctx context.Context, chatID, userID string) error
 }
 
 type groupService struct {
@@ -32,4 +33,8 @@ func (s *groupService) SetKey(ctx context.Context, chatID, userID string, encryp
 
 func (s *groupService) GetKey(ctx context.Context, chatID, userID string) (*model.GroupEncryptionKey, error) {
 	return s.repo.GetKey(ctx, chatID, userID)
+}
+
+func (s *groupService) DeleteKey(ctx context.Context, chatID, userID string) error {
+	return s.repo.DeleteKey(ctx, chatID, userID)
 }

@@ -104,6 +104,7 @@ func main() {
 	api.HandleFunc("/chats/{chat_id}/messages/{message_id}", messageHandler.DeleteMessage).Methods("DELETE")
 	api.HandleFunc("/chats/{chat_id}/group-key", chatHandler.SetGroupKey).Methods("POST")
 	api.HandleFunc("/chats/{chat_id}/group-key", chatHandler.GetGroupKey).Methods("GET")
+	api.HandleFunc("/chats/{chat_id}/group-key/{user_id}", chatHandler.DeleteGroupKey).Methods("DELETE")
 
 	api.HandleFunc("/media", mediaHandler.Upload).Methods("POST")
 	api.HandleFunc("/media/{id}", mediaHandler.Download).Methods("GET")

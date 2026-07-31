@@ -12,6 +12,7 @@ import (
 type GroupKeyRepository interface {
 	SetKey(ctx context.Context, key *model.GroupEncryptionKey) error
 	GetKey(ctx context.Context, chatID, userID string) (*model.GroupEncryptionKey, error)
+	DeleteKey(ctx context.Context, chatID, userID string) error
 }
 
 type pgGroupKeyRepository struct {
@@ -60,4 +61,13 @@ func (r *pgGroupKeyRepository) GetKey(ctx context.Context, chatID, userID string
 		return nil, fmt.Errorf("get group key: %w", err)
 	}
 	return key, nil
+}
+
+func (r *pgGroupKeyRepository) DeleteKey(ctx context.Context, chatID, userID string) error {
+	_, err := r.pool.Exec(ctx, "DELETE FROM group_encryption_keys WHERE chat_id = $1 AND user_id = $2", chatID, userID)
+	if err != nil {
+		return fmt.Errorf("delete group key: %w", err)
+	}
+
+	return nil
 }

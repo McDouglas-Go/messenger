@@ -218,6 +218,29 @@ func (h *ChatHandler) GetGroupKey(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+func (h *ChatHandler) DeleteGroupKey(w http.ResponseWriter, r *http.Request) {
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
+	chatID := mux.Vars(r)["chat_id"]
+	targetUserID := mux.Vars(r)["user_id"]
+
+	detail, err := h.chatService.GetChatWithMembers(r.Context(), chatID, claims.UserID)
+	if err != nil {
+		http.Error(w, "Chat not found", http.StatusNotFound)
+		return
+	}
+	if detail.CurrentRole != "owner" && detail.CurrentRole != "admin" {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	if err := h.groupKeyService.DeleteKey(r.Context(), chatID, targetUserID); err != nil {
+		h.log.Error("DeleteGroupKey failed", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *ChatHandler) GetUserChats(w http.ResponseWriter, r *http.Request) {
 	claims, _ := middleware.GetClaimsFromContext(r.Context())
 

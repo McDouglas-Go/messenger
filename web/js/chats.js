@@ -754,20 +754,11 @@ const Chats = {
             try {
                 await Api.post(`/chats/${this.currentChatId}/members`, { user_ids: selectedIds });
                 await this.loadChatDetail(this.currentChatId);
+                await this.distributeGroupKey(this.currentChatId, selectedIds);
             } catch (err) {
                 alert('Failed to add members: ' + err.message);
             }
         }, 'Add members');
-    },
-
-    async addMembers(userIds) {
-        try {
-            await Api.post(`/chats/${this.currentChatId}/members`, { user_ids: userIds });
-            await this.loadChatDetail(this.currentChatId);
-            await this.distributeGroupKey(this.currentChatId, userIds);
-        } catch (err) {
-            alert('Failed to add members: ' + err.message);
-        }
     },
 
     async removeMember(userId) {
@@ -775,6 +766,7 @@ const Chats = {
         try {
             await Api.del(`/chats/${this.currentChatId}/members`, { user_id: userId });
             await this.loadChatDetail(this.currentChatId);
+            await Api.del(`/chats/${this.currentChatId}/group-key/${userId}`);
         } catch (err) {
             alert('Failed to remove member: ' + err.message);
         }
@@ -1628,7 +1620,7 @@ const Chats = {
                     'raw',
                     rawKey,
                     { name: 'AES-GCM', length: 256 },
-                    false,
+                    true,
                     ['encrypt', 'decrypt']
                 );
                 this.chatKeys[chatId] = this.currentChatSharedKey;
