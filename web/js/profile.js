@@ -5,6 +5,90 @@ const Profile = {
     _pendingAvatarRemove: false,
 
     async render(container) {
+        this._renderSidebarTabs();
+        this.showTab('profile');
+    },
+
+    _renderSidebarTabs() {
+        const chatList = document.getElementById('chat-list');
+        if (!chatList) return;
+        chatList.style.display = 'none';
+        const createChatBtn = document.getElementById('create-chat-btn');
+        if (createChatBtn) createChatBtn.style.display = 'none';
+
+        let tabsContainer = document.getElementById('profile-tabs');
+        if (!tabsContainer) {
+            tabsContainer = document.createElement('div');
+            tabsContainer.id = 'profile-tabs';
+            tabsContainer.className = 'profile-tabs';
+            chatList.parentNode.insertBefore(tabsContainer, chatList.nextSibling);
+        }
+        tabsContainer.style.display = 'block';
+        tabsContainer.innerHTML = `
+            <div class="profile-tab" data-tab="profile">
+                <div class="tab-avatar-small" id="tab-avatar"></div>
+                <div class="tab-info">
+                    <span class="tab-name" id="tab-display-name"></span>
+                    <span class="tab-username" id="tab-username"></span>
+                </div>
+            </div>
+            <div class="profile-tab" data-tab="accounts">
+                <span>Accounts</span>
+            </div>
+            <div class="profile-tab" data-tab="sessions">
+                <span>Sessions</span>
+            </div>
+            <div class="profile-tab" data-tab="notifications">
+                <span>Notifications</span>
+            </div>
+            <div class="profile-tab" data-tab="security">
+                <span>Security & Privacy</span>
+            </div>
+        `;
+
+        Api.get('/me').then(user => {
+            document.getElementById('tab-display-name').textContent = user.display_name;
+            document.getElementById('tab-username').textContent = '@' + user.username;
+            if (user.profile_photo_url) {
+                Api.loadMediaUrl(user.profile_photo_url).then(url => {
+                    if (url) {
+                        document.getElementById('tab-avatar').innerHTML = `<img src="${escapeHtml(url)}" alt="Avatar">`;
+                    }
+                });
+            }
+        });
+        tabsContainer.querySelectorAll('.profile-tab').forEach(tab => {
+            tab.addEventListener('click', () => this.showTab(tab.dataset.tab));
+        });
+    },
+
+    showTab(tabName) {
+        const main = document.getElementById('main');
+        if (!main) return;
+
+        document.querySelectorAll('.profile-tab').forEach(t => t.classList.remove('active'));
+        const activeTab = document.querySelector(`.profile-tab[data-tab="${tabName}"]`);
+        if (activeTab) activeTab.classList.add('active');
+        switch (tabName) {
+            case 'profile':
+                this.renderProfileTab(main);
+                break;
+            case 'accounts':
+                this.renderPlaceholder(main, 'Accounts', 'Manage multiple accounts on this device. Coming soon.');
+                break;
+            case 'sessions':
+                this.renderSessionsTab(main);
+                break;
+            case 'notifications':
+                this.renderPlaceholder(main, 'Notifications', 'Configure notification settings. Coming soon.');
+                break;
+            case 'security':
+                this.renderSecurityTab(main);
+                break;
+        }
+    },
+
+    async renderProfileTab(container) {
         let user;
         try {
             user = await Api.get('/me');
@@ -17,10 +101,15 @@ const Profile = {
         container.innerHTML = `
             <div class="profile-page">
                 <div class="profile-card">
-                    <div class="back-btn-container">
-                        <button id="back-to-chats-btn" class="icon-btn" title="Back">←</button>
-                    </div>
                     <div class="profile-info">
+                        <div class="menu-wrapper" id="profile-menu-wrapper">
+                            <button id="profile-menu-btn" class="icon-btn menu-trigger">⋯</button>
+                            <div id="profile-dropdown" class="dropdown-menu" style="display:none;">
+                                <button id="edit-profile-btn">✎ Edit Profile</button>
+                                <button id="logout-btn">⎋ Logout</button>
+                                <button id="delete-account-btn" class="danger-btn">⚠ Delete Account</button>
+                            </div>
+                        </div>
                         <div class="profile-avatar" id="profile-avatar">
                             ${avatarUrl
                                 ? `<img src="${escapeHtml(avatarUrl)}" alt="Avatar">`
@@ -36,25 +125,10 @@ const Profile = {
                         <p class="about" id="about-text">${escapeHtml(user.about || '')}</p>
                         <p class="created">Registered: ${new Date(user.created_at).toLocaleDateString()}</p>
                     </div>
-                    <div class="menu-wrapper">
-                        <button id="profile-menu-btn" class="icon-btn menu-trigger">⋯</button>
-                        <div id="profile-dropdown" class="dropdown-menu" style="display:none;">
-                            <button id="edit-profile-btn">✎ Edit Profile</button>
-                            <button id="download-key-btn">ꗃ Download Private Key</button>
-                            <button id="logout-btn">⎋ Logout</button>
-                            <button id="delete-account-btn" class="danger-btn">⚠ Delete Account</button>
-                        </div>
-                    </div>
                     <div id="profile-editor-actions" class="editor-actions" style="display:none;">
                         <button id="cancel-edit-profile">Cancel</button>
                         <button id="save-edit-profile">Save</button>
                     </div>
-                </div>
-                <div class="sessions-section">
-                    <h3>Sessions</h3>
-                    <button id="load-sessions-btn">Show Sessions</button>
-                    <button id="toggle-sessions-btn" style="display:none;">Hide Sessions</button>
-                    <div id="sessions-list"></div>
                 </div>
             </div>
         `;
@@ -68,8 +142,6 @@ const Profile = {
                 Api.openMediaViewer(avatarUrl, 'image/jpeg', fileName);
             });
         }
-        const backBtn = document.getElementById('back-to-chats-btn');
-        backBtn.onclick = () => window.location.hash = '#chats';
         const menuBtn = document.getElementById('profile-menu-btn');
         const dropdown = document.getElementById('profile-dropdown');
         menuBtn.onclick = (e) => {
@@ -83,7 +155,6 @@ const Profile = {
         let isEditing = false;
         document.getElementById('edit-profile-btn').onclick = () => {
             menuBtn.style.display = 'none';
-            backBtn.style.display = 'none';
             isEditing = true;
             const displayNameText = document.getElementById('display-name-text');
             displayNameText.style.display = 'none';
@@ -199,36 +270,75 @@ const Profile = {
             const avatar = document.getElementById('profile-avatar');
             if (avatar) avatar.onclick = null;
             menuBtn.style.display = 'flex';
-            backBtn.style.display = 'flex';
             isEditing = false;
         };
         document.getElementById('cancel-edit-profile').onclick = () => finishEdit(false);
         document.getElementById('save-edit-profile').onclick = () => finishEdit(true);
 
-        document.getElementById('download-key-btn')?.addEventListener('click', () => this.downloadPrivateKey(user));
         document.getElementById('logout-btn')?.addEventListener('click', () => {
             if (typeof logout === 'function') logout();
         });
         document.getElementById('delete-account-btn')?.addEventListener('click', () => this.confirmDeleteAccount());
-
-        document.getElementById('load-sessions-btn')?.addEventListener('click', () => this.loadAndShowSessions());
-        document.getElementById('toggle-sessions-btn')?.addEventListener('click', () => this.hideSessions());
     },
 
-    async loadAndShowSessions() {
-        const sessions = await Api.get('/sessions');
-        this.renderSessionList(sessions);
-        this.attachSessionHandlers();
-        document.getElementById('load-sessions-btn').style.display = 'none';
-        document.getElementById('toggle-sessions-btn').style.display = 'inline-block';
+    renderSessionsTab(container) {
+        container.innerHTML = `
+            <div class="profile-page">
+                <div class="profile-card">
+                    <h3>Active sessions</h3>
+                    <button id="revoke-all-sessions-btn" class="danger-btn" style="display:none;">Revoke All Other Sessions</button>
+                    <div id="sessions-list">Loading sessions…</div>
+                </div>
+            </div>
+        `;
+        this.loadSessions();
+        document.getElementById('revoke-all-sessions-btn').onclick = () => this.revokeAllOtherSessions();
     },
 
-    hideSessions() {
-        document.getElementById('sessions-list').innerHTML = '';
-        document.getElementById('toggle-sessions-btn').style.display = 'none';
-        document.getElementById('load-sessions-btn').style.display = 'inline-block';
-        if (this._sessionClickHandler) {
-            document.getElementById('sessions-list').removeEventListener('click', this._sessionClickHandler);
+    renderSecurityTab(container) {
+        container.innerHTML = `
+            <div class="profile-page">
+                <div class="profile-card">
+                    <h3>Security & Privacy</h3>
+                    <button id="download-key-btn" class="download-key-btn">
+                        <svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                        Download Private Key
+                    </button>
+                    <p class="security-warning">⚠︎ Use this key only for other sessions on this account. Never share your private key with anyone. It grants full access to your encrypted messages.</p>
+                </div>
+            </div>
+        `;
+
+        document.getElementById('download-key-btn').onclick = () => this.downloadPrivateKey();
+    },
+
+    renderPlaceholder(container, title, message) {
+        container.innerHTML = `
+            <div class="profile-page">
+                <div class="profile-card">
+                    <h3>${escapeHtml(title)}</h3>
+                    <p>${escapeHtml(message)}</p>
+                </div>
+            </div>
+        `;
+    },
+
+    _restoreSidebar() {
+        const tabsContainer = document.getElementById('profile-tabs');
+        if (tabsContainer) tabsContainer.style.display = 'none';
+        const chatList = document.getElementById('chat-list');
+        if (chatList) chatList.style.display = '';
+        const createChatBtn = document.getElementById('create-chat-btn');
+        if (createChatBtn) createChatBtn.style.display = '';
+    },
+
+    async loadSessions() {
+        try {
+            const sessions = await Api.get('/sessions');
+            this.renderSessionList(sessions);
+            this.attachSessionHandlers();
+        } catch (err) {
+            document.getElementById('sessions-list').innerHTML = `<p class="error">Failed to load sessions: ${err.message}</p>`;
         }
     },
 
@@ -236,12 +346,13 @@ const Profile = {
         const container = document.getElementById('sessions-list');
         if (!container) return;
         container.innerHTML = sessions.length === 0
-            ? '<p>No active sessions</p>'
+            ? '<p>Failed to load sessions</p>'
             : sessions.map(s => `
                 <div class="session-item ${s.is_current ? 'current' : ''}">
                     <div class="session-info">
                         <span class="session-ua">${escapeHtml(s.user_agent || 'Unknown device')}</span>
                         <span class="session-time">Created: ${new Date(s.created_at).toLocaleString()}</span>
+                        <span class="session-expires">Expires: ${new Date(s.expires_at).toLocaleString()}</span>
                         ${s.is_current ? '<span class="current-badge">Current</span>' : ''}
                     </div>
                     <button class="revoke-session-btn" data-session-id="${s.id}" ${s.is_current ? 'disabled' : ''}>Revoke</button>
@@ -272,6 +383,29 @@ const Profile = {
         };
 
         container.addEventListener('click', this._sessionClickHandler);
+    },
+
+    async revokeAllOtherSessions() {
+        if (!confirm('Are you sure you want to revoke all other sessions?')) return;
+        try {
+            const sessions = await Api.get('/sessions');
+            const currentSesison = sessions.find(s => s.is_current);
+            const otherSessions = sessions.filter(s => !s.is_current);
+            if (otherSessions.length === 0) {
+                alert('No other sessions to revoke.');
+                return;
+            }
+            for (const session of otherSessions) {
+                try {
+                    await Api.del(`/sessions/${session.id}`);
+                } catch (e) {
+                    console.error('Failed to revoke session', session.id, e);
+                }
+            }
+            await this.loadSessions();
+        } catch (err) {
+            alert('Failed to revoke sessions: ' + err.message);
+        }
     },
 
     async removeAvatar(user) {

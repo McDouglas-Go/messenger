@@ -18,6 +18,7 @@ function logout() {
 
 function renderChats(container) {
     if (!requireAuth()) return;
+    Profile._restoreSidebar();
     container.classList.remove('chat-open');
     if (Chats.chats.length === 0) {
         Chats.init();
@@ -27,35 +28,6 @@ function renderChats(container) {
     placeholder.className = 'chat-placeholder';
     placeholder.textContent = 'Select a chat to start messaging';
     container.appendChild(placeholder);
-
-    const createChatBtn = document.getElementById('create-chat-btn');
-    if (createChatBtn) {
-        createChatBtn.addEventListener('click', () => {
-            if (!requireAuth()) return;
-            Chats.showCreateChatMenu();
-        });
-    }
-
-    const chatsBtn = document.getElementById('chats-btn');
-    if (chatsBtn) {
-        chatsBtn.addEventListener('click', () => {
-            window.location.hash = '#chats';
-            Chats.currentChatId = null;
-            Chats.currentChatDetail = null;
-            const main = document.getElementById('main');
-            if (main) {
-                main.classList.remove('chat-open');
-                main.innerHTML = '<div class="chat-placeholder">Select a chat to start messaging</div>';
-            }
-            document.querySelectorAll('#chat-list .active').forEach(li => li.classList.remove('active'));
-        });
-    }
-    const profileBtn = document.getElementById('profile-btn');
-    if (profileBtn) {
-        profileBtn.addEventListener('click', () => {
-            window.location.hash = '#profile';
-        });
-    }
 }
 
 function renderSettings(container) {
@@ -75,16 +47,49 @@ Router.add('chats', renderChats);
 Router.add('settings', renderSettings);
 Router.add('profile', renderProfile);
 
+document.addEventListener('DOMContentLoaded', () => {
+    const chatsBtn = document.getElementById('chats-btn');
+    if (chatsBtn) {
+        chatsBtn.addEventListener('click', () => {
+            Profile._restoreSidebar();
+            window.location.hash = '#chats';
+            Chats.currentChatId = null;
+            Chats.currentChatDetail = null;
+            const main = document.getElementById('main');
+            if (main) {
+                main.classList.remove('chat-open');
+                main.innerHTML = '<div class="chat-placeholder">Select a chat to start messaging</div>';
+            }
+            document.querySelectorAll('#chat-list .active').forEach(li => li.classList.remove('active'));
+        });
+    }
+    const profileBtn = document.getElementById('profile-btn');
+    if (profileBtn) {
+        profileBtn.addEventListener('click', () => {
+            window.location.hash = '#profile';
+        });
+    }
+    const createChatBtn = document.getElementById('create-chat-btn');
+    if (createChatBtn) {
+        createChatBtn.addEventListener('click', () => Chats.showCreateChatMenu());
+    }
+});
+
 (async function () {
+    const currentHash = window.location.hash.substring(1);
     if (!Api.authToken) {
         const restored = await Api.refreshToken();
         if (restored) {
-            window.location.hash = '#chats';
+            if (!currentHash || currentHash === 'login') {
+                window.location.hash = '#chats';
+            }
         } else {
             window.location.hash = '#login';
         }
     } else {
-        window.location.hash = '#chats';
+        if (!currentHash || currentHash === 'login') {
+            window.location.hash = '#chats';
+        }
     }
 
     window.addEventListener('hashchange', () => Router.load());

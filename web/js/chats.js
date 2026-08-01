@@ -357,7 +357,7 @@ const Chats = {
                 </div>
             </div>
             <div class="chat-header-arrow" id="chat-header-arrow">︾ ︾ ︾</div>
-            <div class="menu-wrapper">
+            <div class="menu-wrapper" id="header-menu-wrapper">
                 <button id="chat-menu-btn" class="icon-btn menu-trigger">⋯</button>
                 <div id="chat-menu-dropdown" class="dropdown-menu"></div>
             </div>
@@ -653,7 +653,7 @@ const Chats = {
             await Api.del(`/chats/${this.currentChatId}`);
             this.currentChatId = null;
             this.currentChatDetail = null;
-            document.getElementById('main').innerHTML = '<div class="placeholder">Select a chat to start messaging</div>';
+            document.getElementById('main').innerHTML = '<div class="chat-placeholder">>Select a chat to start messaging</div>';
             this.hideInfoPanel();
             await this.loadChats();
         } catch (err) {
