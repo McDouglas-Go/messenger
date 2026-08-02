@@ -13,7 +13,10 @@ import (
 
 type MesssageService interface {
 	Send(ctx context.Context, senderID string, msg *model.EncryptedMessage) error
+	GetByID(ctx context.Context, messageID, userID, chatID string) (*model.EncryptedMessage, error)
 	GetChatHistory(ctx context.Context, chatID, userID string, limit, offset int) ([]*model.EncryptedMessage, error)
+	MarkDelivered(ctx context.Context, messageID string) error
+	MarkAsRead(ctx context.Context, messageID string) error
 	EditMessage(ctx context.Context,
 		userID, chatID, messageID string,
 		encryptedContent, nonce []byte,
@@ -78,6 +81,29 @@ func (s *messageService) Send(ctx context.Context, senderID string, msg *model.E
 	return nil
 }
 
+func (s *messageService) GetByID(ctx context.Context, messageID, userID, chatID string) (*model.EncryptedMessage, error) {
+	members, err := s.chatRepo.GetChatMembers(ctx, chatID)
+	if err != nil {
+		return nil, fmt.Errorf("Get chat members: %w", err)
+	}
+	isMember := false
+	for _, member := range members {
+		if member.UserID == userID {
+			isMember = true
+			break
+		}
+	}
+	if !isMember {
+		return nil, errors.New("reader is not a member of the chat")
+	}
+	message, err := s.msgRepo.GetByID(ctx, messageID)
+	if err != nil {
+		return nil, fmt.Errorf("Get message: %w", err)
+	}
+
+	return message, nil
+}
+
 func (s *messageService) GetChatHistory(ctx context.Context, chatID, userID string, limit, offset int) ([]*model.EncryptedMessage, error) {
 	members, err := s.chatRepo.GetChatMembers(ctx, chatID)
 	if err != nil {
@@ -95,6 +121,52 @@ func (s *messageService) GetChatHistory(ctx context.Context, chatID, userID stri
 	}
 
 	return s.msgRepo.GetChatMessages(ctx, chatID, limit, offset)
+}
+
+func (s *messageService) MarkDelivered(ctx context.Context, messageID string) error {
+	msg, err := s.msgRepo.GetByID(ctx, messageID)
+	if err != nil {
+		return fmt.Errorf("get message: %w", err)
+	}
+	if msg == nil {
+		return fmt.Errorf("message not found")
+	}
+	if err := s.msgRepo.UpdateStatus(ctx, messageID, model.StatusDelivered); err != nil {
+		return fmt.Errorf("update status: %w", err)
+	}
+
+	event := map[string]interface{}{
+		"event": "message_delivered",
+		"data": map[string]string{
+			"message_id": messageID,
+			"chat_id":    msg.ChatID,
+		},
+	}
+	s.hub.SendToUser(msg.SenderID, event)
+	return nil
+}
+
+func (s *messageService) MarkAsRead(ctx context.Context, messageID string) error {
+	msg, err := s.msgRepo.GetByID(ctx, messageID)
+	if err != nil {
+		return fmt.Errorf("get message: %w", err)
+	}
+	if msg == nil {
+		return fmt.Errorf("message not found")
+	}
+	if err := s.msgRepo.UpdateStatus(ctx, messageID, model.StatusRead); err != nil {
+		return fmt.Errorf("update status: %w", err)
+	}
+
+	event := map[string]interface{}{
+		"event": "messages_read",
+		"data": map[string]string{
+			"message_id": messageID,
+			"chat_id":    msg.ChatID,
+		},
+	}
+	s.hub.SendToUser(msg.SenderID, event)
+	return nil
 }
 
 func (s *messageService) EditMessage(ctx context.Context,

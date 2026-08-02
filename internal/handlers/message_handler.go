@@ -20,7 +20,10 @@ type MessageHandler struct {
 }
 
 func Newmessagehandler(messageService service.MesssageService, logger *slog.Logger) *MessageHandler {
-	return &MessageHandler{messageService: messageService, log: logger}
+	return &MessageHandler{
+		messageService: messageService,
+		log:            logger,
+	}
 }
 
 type sendMessageRequest struct {
@@ -36,6 +39,7 @@ type messageResponse struct {
 	EncryptedContent string  `json:"encrypted_content"` // base64
 	Nonce            string  `json:"nonce"`             // base64
 	ContentType      string  `json:"content_type"`
+	Status           string  `json:"status"`
 	SentAt           string  `json:"sent_at"`
 	EditedAt         *string `json:"edited_at,omitempty"`
 }
@@ -53,6 +57,7 @@ func MessageToResponse(msg *model.EncryptedMessage) messageResponse {
 		SenderID:         msg.SenderID,
 		EncryptedContent: base64.StdEncoding.EncodeToString(msg.EncryptedContent),
 		Nonce:            base64.StdEncoding.EncodeToString(msg.Nonce),
+		Status:           string(msg.Status),
 		ContentType:      string(msg.ContentType),
 		SentAt:           msg.SentAt.Format(time.RFC3339),
 	}
@@ -111,6 +116,7 @@ func (h *MessageHandler) Send(w http.ResponseWriter, r *http.Request) {
 		SenderID:         msg.SenderID,
 		EncryptedContent: req.EncryptedContent,
 		Nonce:            req.Nonce,
+		Status:           string(msg.Status),
 		ContentType:      string(msg.ContentType),
 		SentAt:           msg.SentAt.Format(time.RFC3339),
 	}
@@ -161,6 +167,7 @@ func (h *MessageHandler) GetChatHistory(w http.ResponseWriter, r *http.Request) 
 			EncryptedContent: base64.StdEncoding.EncodeToString(msg.EncryptedContent),
 			Nonce:            base64.StdEncoding.EncodeToString(msg.Nonce),
 			ContentType:      string(msg.ContentType),
+			Status:           string(msg.Status),
 			SentAt:           msg.SentAt.Format(time.RFC3339),
 			EditedAt:         editedAt,
 		})
@@ -171,6 +178,44 @@ func (h *MessageHandler) GetChatHistory(w http.ResponseWriter, r *http.Request) 
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		slog.Error("failed to encode response", "error", err)
 	}
+}
+
+func (h *MessageHandler) MarkAsRead(w http.ResponseWriter, r *http.Request) {
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
+	messageID := mux.Vars(r)["message_id"]
+	chatID := mux.Vars(r)["chat_id"]
+
+	msg, err := h.messageService.GetByID(r.Context(), messageID, claims.UserID, chatID)
+	if err != nil || msg == nil {
+		http.Error(w, "Message not found", http.StatusNotFound)
+		return
+	}
+	if err := h.messageService.MarkAsRead(r.Context(), messageID); err != nil {
+		h.log.Error("MarkDelivered failed", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *MessageHandler) MarkAsDelivered(w http.ResponseWriter, r *http.Request) {
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
+	messageID := mux.Vars(r)["message_id"]
+	chatID := mux.Vars(r)["chat_id"]
+
+	msg, err := h.messageService.GetByID(r.Context(), messageID, claims.UserID, chatID)
+	if err != nil || msg == nil {
+		http.Error(w, "Message not found", http.StatusNotFound)
+		return
+	}
+	if err := h.messageService.MarkDelivered(r.Context(), messageID); err != nil {
+		h.log.Error("MarkDelivered failed", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *MessageHandler) EditMessage(w http.ResponseWriter, r *http.Request) {
@@ -222,6 +267,7 @@ func (h *MessageHandler) EditMessage(w http.ResponseWriter, r *http.Request) {
 		SenderID:         updatedMsg.SenderID,
 		EncryptedContent: base64.StdEncoding.EncodeToString(updatedMsg.EncryptedContent),
 		Nonce:            base64.StdEncoding.EncodeToString(updatedMsg.Nonce),
+		Status:           string(updatedMsg.Status),
 		ContentType:      string(updatedMsg.ContentType),
 		SentAt:           updatedMsg.SentAt.Format(time.RFC3339),
 	}

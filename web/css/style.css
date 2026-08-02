@@ -218,6 +218,11 @@ body {
     text-overflow: ellipsis;
     margin-top: 3px;
 }
+.chat-last-msg .message-status {
+    margin-left: 4px;
+    font-size: 12px;
+    vertical-align: middle;
+}
 
 .chat-meta {
     text-align: right;
@@ -458,6 +463,17 @@ body.auth-page #main {
 .edited-at {
     font-size: 11px;
     color: #888;
+}
+.message-status {
+    margin-left: 6px;
+    font-size: 12px;
+}
+.message-status.sent { 
+    color: #aaa; 
+}
+.message-status.read, .message-status.delivered { 
+    font-weight: 300;
+    color: #4a90d9; 
 }
 
 @keyframes fadeOut {

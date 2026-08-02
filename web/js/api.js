@@ -11,6 +11,8 @@ function parseJwt(token) {
     }
 }
 
+let refreshPromise = null;
+
 const Api = {
     authToken: null,
     userId: null,
@@ -51,7 +53,7 @@ const Api = {
                 response = await fetch(url, options);
             } else {
                 window.location.hash = '#login';
-                throw new Error('Session expired');
+                return Promise.reject(new Error('Not authenticated'));
             }
         }
 
@@ -64,15 +66,24 @@ const Api = {
     },
 
     async refreshToken() {
-        try {
-            const resp = await fetch('/refresh', { method: 'POST' });
-            if (!resp.ok) return false;
-            const data = await resp.json();
-            this.setToken(data.access_token);
-            return true;
-        } catch (e) {
-            return false;
+        if (refreshPromise) {
+            return refreshPromise;
         }
+        refreshPromise = (async () => {
+            try {
+                const resp = await fetch('/refresh', { method: 'POST' });
+                if (!resp.ok) return false;
+                const data = await resp.json();
+                this.setToken(data.access_token);
+                return true;
+            } catch (e) {
+                return false;
+            } finally {
+                refreshPromise = null;
+            }
+        })();
+
+        return refreshPromise;
     },
 
     async login(email, password) {

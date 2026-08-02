@@ -217,11 +217,6 @@ func (s *authService) RefreshToken(ctx context.Context, refreshToken, userAgent 
 	if session == nil {
 		return "", "", errors.New("invalid refresh token")
 	}
-	if session.UserAgent != "" && session.UserAgent != userAgent {
-		s.logger.Warn("user agent mismatch in refresh", "session_id", session.ID, "expected", session.UserAgent, "got", userAgent)
-		s.sessionRepo.Delete(ctx, session.ID)
-		return "", "", errors.New("session possibly compromised, please login again")
-	}
 
 	user, err := s.userRepo.GetByID(ctx, session.UserID)
 	if err != nil {

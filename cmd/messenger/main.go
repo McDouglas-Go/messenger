@@ -102,6 +102,8 @@ func main() {
 	api.HandleFunc("/chats/{chat_id}/messages", messageHandler.GetChatHistory).Methods("GET")
 	api.HandleFunc("/chats/{chat_id}/messages/{message_id}", messageHandler.EditMessage).Methods("PUT")
 	api.HandleFunc("/chats/{chat_id}/messages/{message_id}", messageHandler.DeleteMessage).Methods("DELETE")
+	api.HandleFunc("/chats/{chat_id}/messages/{message_id}/read", messageHandler.MarkAsRead).Methods("POST")
+	api.HandleFunc("/chats/{chat_id}/messages/{message_id}/delivered", messageHandler.MarkAsDelivered).Methods("POST")
 	api.HandleFunc("/chats/{chat_id}/group-key", chatHandler.SetGroupKey).Methods("POST")
 	api.HandleFunc("/chats/{chat_id}/group-key", chatHandler.GetGroupKey).Methods("GET")
 	api.HandleFunc("/chats/{chat_id}/group-key/{user_id}", chatHandler.DeleteGroupKey).Methods("DELETE")

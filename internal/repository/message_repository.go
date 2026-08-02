@@ -17,6 +17,7 @@ type MessageRepository interface {
 	GetAllMessages(ctx context.Context, chatID string) ([]*model.EncryptedMessage, error)
 	GetByID(ctx context.Context, id string) (*model.EncryptedMessage, error)
 	Update(ctx context.Context, msg *model.EncryptedMessage) error
+	UpdateStatus(ctx context.Context, messageID string, status model.MessageStatus) error
 	Delete(ctx context.Context, messageID string) error
 }
 
@@ -36,8 +37,8 @@ func (r *pgMessageRepository) Create(ctx context.Context, msg *model.EncryptedMe
 	defer tx.Rollback(ctx)
 
 	query := `
-        INSERT INTO messages (chat_id, sender_id, encrypted_content, nonce, content_type)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO messages (chat_id, sender_id, encrypted_content, nonce, content_type, status)
+        VALUES ($1, $2, $3, $4, $5, 'sent')
         RETURNING id, sent_at`
 
 	err = tx.QueryRow(ctx, query,
@@ -61,7 +62,7 @@ func (r *pgMessageRepository) Create(ctx context.Context, msg *model.EncryptedMe
 
 func (r *pgMessageRepository) GetChatMessages(ctx context.Context, chatID string, limit, offset int) ([]*model.EncryptedMessage, error) {
 	query := `
-        SELECT id, chat_id, sender_id, encrypted_content, nonce, content_type, sent_at, edited_at
+        SELECT id, chat_id, sender_id, encrypted_content, nonce, content_type, status, sent_at, edited_at
         FROM messages
         WHERE chat_id = $1
         ORDER BY sent_at ASC
@@ -83,6 +84,7 @@ func (r *pgMessageRepository) GetChatMessages(ctx context.Context, chatID string
 			&m.EncryptedContent,
 			&m.Nonce,
 			&m.ContentType,
+			&m.Status,
 			&m.SentAt,
 			&m.EditedAt,
 		)
@@ -100,7 +102,7 @@ func (r *pgMessageRepository) GetChatMessages(ctx context.Context, chatID string
 
 func (r *pgMessageRepository) GetByID(ctx context.Context, id string) (*model.EncryptedMessage, error) {
 	query := `
-        SELECT id, chat_id, sender_id, encrypted_content, nonce, content_type, sent_at, edited_at
+        SELECT id, chat_id, sender_id, encrypted_content, nonce, content_type, status, sent_at, edited_at
         FROM messages
         WHERE id = $1`
 
@@ -112,6 +114,7 @@ func (r *pgMessageRepository) GetByID(ctx context.Context, id string) (*model.En
 		&msg.EncryptedContent,
 		&msg.Nonce,
 		&msg.ContentType,
+		&msg.Status,
 		&msg.SentAt,
 		&msg.EditedAt,
 	)
@@ -127,7 +130,7 @@ func (r *pgMessageRepository) GetByID(ctx context.Context, id string) (*model.En
 
 func (r *pgMessageRepository) GetLastMessage(ctx context.Context, chatID string) (*model.EncryptedMessage, error) {
 	query := `
-        SELECT id, chat_id, sender_id, encrypted_content, nonce, content_type, sent_at, edited_at
+        SELECT id, chat_id, sender_id, encrypted_content, nonce, content_type, status, sent_at, edited_at
         FROM messages
         WHERE chat_id = $1
         ORDER BY sent_at DESC
@@ -141,6 +144,7 @@ func (r *pgMessageRepository) GetLastMessage(ctx context.Context, chatID string)
 		&msg.EncryptedContent,
 		&msg.Nonce,
 		&msg.ContentType,
+		&msg.Status,
 		&msg.SentAt,
 		&msg.EditedAt,
 	)
@@ -155,7 +159,7 @@ func (r *pgMessageRepository) GetLastMessage(ctx context.Context, chatID string)
 
 func (r *pgMessageRepository) GetAllMessages(ctx context.Context, chatID string) ([]*model.EncryptedMessage, error) {
 	query := `
-        SELECT id, chat_id, sender_id, encrypted_content, nonce, content_type, sent_at, edited_at
+        SELECT id, chat_id, sender_id, encrypted_content, nonce, content_type, status, sent_at, edited_at
         FROM messages
         WHERE chat_id = $1
         ORDER BY sent_at`
@@ -175,6 +179,7 @@ func (r *pgMessageRepository) GetAllMessages(ctx context.Context, chatID string)
 			&msg.EncryptedContent,
 			&msg.Nonce,
 			&msg.ContentType,
+			&msg.Status,
 			&msg.SentAt,
 			&msg.EditedAt,
 		)
@@ -193,7 +198,7 @@ func (r *pgMessageRepository) Update(ctx context.Context, msg *model.EncryptedMe
             nonce = $2,
             content_type = $3,
             edited_at = now()
-        WHERE id = $5
+        WHERE id = $4
         RETURNING edited_at`
 
 	err := r.pool.QueryRow(ctx, query,
@@ -207,6 +212,15 @@ func (r *pgMessageRepository) Update(ctx context.Context, msg *model.EncryptedMe
 			return fmt.Errorf("message not found")
 		}
 		return fmt.Errorf("update message: %w", err)
+	}
+
+	return nil
+}
+
+func (r *pgMessageRepository) UpdateStatus(ctx context.Context, messageID string, status model.MessageStatus) error {
+	_, err := r.pool.Exec(ctx, "UPDATE messages SET status = $1 WHERE id = $2", status, messageID)
+	if err != nil {
+		return fmt.Errorf("Update message status: %w", err)
 	}
 
 	return nil

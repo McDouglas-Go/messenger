@@ -42,11 +42,13 @@ CREATE TABLE messages (
     encrypted_content BYTEA NOT NULL,       
     nonce BYTEA,                                   
     content_type VARCHAR(20) NOT NULL DEFAULT 'text', 
+    status VARCHAR(20) NOT NULL DEFAULT 'sent',
     sent_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     edited_at TIMESTAMPTZ
 );
 
 CREATE INDEX idx_messages_chat_sent ON messages (chat_id, sent_at);
+CREATE INDEX idx_messages_status ON messages (chat_id, status);
 
 CREATE TABLE media (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

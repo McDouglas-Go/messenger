@@ -4,6 +4,7 @@ const Chats = {
     ws: null,
     currentChatDetail: null,
     currentChatSharedKey: null,
+    _messageObserver: null,
     chatKeys: {},
     mediaProcessed: new Set(),
     mediaUrlCache: new Map(),
@@ -16,7 +17,7 @@ const Chats = {
     async loadChats() {
         try {
             this.chats = await Api.getChats();
-            await this.renderChatList();
+            await this.renderAllChats();
         } catch (err) {
             console.error('Failed to load chats:', err);
         }
@@ -36,43 +37,86 @@ const Chats = {
         }
     },
 
-    async renderChatList() {
+    async renderChatInfo(chatId) {
+        const chat = this.chats.find(c => c.id === chatId);
+        if (!chat) return;
+        const li = document.getElementById(`chat-${chatId}`);
+        if (!li) return;
+
+        let title = '';
+        const avatarDiv = li.querySelector('.chat-avatar');
+        const titleDiv = li.querySelector('.chat-title');
+        if (chat.type === 'private' && chat.other_user) {
+            title = chat.other_user.display_name || chat.other_user.username;
+            const avatarUrl = await Api.getUserAvatar(chat.other_user.id, chat.other_user.profile_photo_url);
+            if (avatarDiv) {
+                avatarDiv.innerHTML = avatarUrl
+                    ? `<img src="${escapeHtml(avatarUrl)}" alt="Avatar">`
+                    : '';
+            }
+        } else {
+            title = chat.name;
+            if (avatarDiv) avatarDiv.innerHTML = '';
+        }
+
+        if (titleDiv) titleDiv.textContent = title;
+    },
+
+    async renderLastMessage(chatId) {
+        const chat = this.chats.find(c => c.id === chatId);
+        if (!chat) return;
+        const li = document.getElementById(`chat-${chatId}`);
+        if (!li) return;
+        const lastMsgEl = li.querySelector('.chat-last-msg');
+        if (!lastMsgEl) return;
+        const oldStatus = lastMsgEl.querySelector('.message-status');
+        if (oldStatus) oldStatus.remove();
+
+        let lastMsgText = await this.formatLastMessage(chat);
+        lastMsgEl.innerHTML = escapeHtml(lastMsgText);
+
+        let statusIndicator = '';
+        if (chat.last_message && chat.last_message.sender_id === Api.userId) {
+            const st = chat.last_message.status;
+            if (st === 'read') {
+                statusIndicator = '<span class="message-status read">✓✓</span>';
+            } else if (st === 'delivered') {
+                statusIndicator = '<span class="message-status delivered">✓</span>';
+            } else {
+                statusIndicator = '<span class="message-status sent">✓</span>';
+            }
+        }
+        lastMsgEl.insertAdjacentHTML('beforeend', statusIndicator);
+    },
+
+    async renderChatItem(chatId) {
+        await this.renderChatInfo(chatId);
+        await this.renderLastMessage(chatId);
+    },
+
+    async renderAllChats() {
         const list = document.getElementById('chat-list');
         if (!list) return;
         list.innerHTML = '';
-
         for (const chat of this.chats) {
             const li = document.createElement('li');
-            li.dataset.chatId = chat.id;
+            li.id = `chat-${chat.id}`;
             li.className = 'chat-item';
-            if (chat.id === this.currentChatId) {
-                li.classList.add('active');
-            }
-
-            let title = '';
-            let avatarHtml = '';
-            if (chat.type === 'private' && chat.other_user) {
-                title = chat.other_user.display_name || chat.other_user.username;
-                const avatarUrl = await Api.getUserAvatar(chat.other_user.id, chat.other_user.profile_photo_url);
-                if (avatarUrl) avatarHtml = `<img src="${escapeHtml(avatarUrl)}" alt="Avatar"">`;
-            } else {
-                title = chat.name;
-            }
-
-            let lastMsgText = await this.formatLastMessage(chat);
+            if (chat.id === this.currentChatId) li.classList.add('active');
+            li.addEventListener('click', () => this.selectChat(chat.id));
 
             li.innerHTML = `
-                <div class="chat-avatar">${avatarHtml}</div>
+                <div class="chat-avatar"></div>
                 <div class="chat-info">
-                    <div class="chat-title">${escapeHtml(title)}</div>
-                    <div class="chat-last-msg">${escapeHtml(lastMsgText)}</div>
+                    <div class="chat-title"></div>
+                    <div class="chat-last-msg"></div>
                 </div>
                 <div class="chat-meta">
                     <div class="chat-time"></div>
                 </div>
             `;
-            li.addEventListener('click', () => Chats.selectChat(chat.id));
             list.appendChild(li);
+            await this.renderChatItem(chat.id);
         }
     },
 
@@ -126,7 +170,15 @@ const Chats = {
         if (this.currentChatId === chatId) return;
         this.currentChatId = chatId;
         this.currentChatSharedKey = null;
-        await this.renderChatList();
+        if (this._messageObserver) {
+            this._messageObserver.disconnect();
+            this._messageObserver = null;
+        }
+        const activeChat = document.querySelector('#chat-list .active');
+        if (activeChat) activeChat.classList.remove('active');
+        const activeLi = document.getElementById(`chat-${this.currentChatId}`);
+        if (activeLi) activeLi.classList.add('active');
+        await this.renderChatItem(chatId);
         this.hideInfoPanel();
         await this.loadChatDetail(chatId);
         await this.loadMessages(chatId);
@@ -614,7 +666,7 @@ const Chats = {
                 nameText.style.display = '';
                 editBtn.style.display = '';
                 this.loadChatDetail(this.currentChatId);
-                this.loadChats();
+                this.renderChatInfo(this.currentChatId);
             } catch (err) {
                 alert('Failed to rename: ' + err.message);
                 input.remove();
@@ -958,6 +1010,7 @@ const Chats = {
 
         this.renderChatHeader();
         if (list) list.scrollTop = list.scrollHeight;
+        this.observeMessages();
     },
 
     updateSendBtn() {
@@ -1108,6 +1161,18 @@ const Chats = {
             const member = this.currentChatDetail.members.find(m => m.user_id === msg.sender_id);
             senderName = member ? (member.display_name || member.username) : 'Unknown';
         }
+        let statusHtml = ''
+        if (isOwn) {
+            if (msg.status === 'read') {
+                statusHtml = '<span class="message-status read">✓✓</span>';
+            } else if (msg.status === 'delivered') {
+                statusHtml = '<span class="message-status delivered">✓</span>';
+            } else {
+                statusHtml = '<span class="message-status sent">✓</span>';
+            }
+        } else {
+            statusHtml = '<span class="message-status" style="display:none;"></span>';
+        }
         div.innerHTML = `
             ${senderName ? `<div class="sender-name">${escapeHtml(senderName)}</div>` : ''}
             ${mediaHtml}
@@ -1115,12 +1180,17 @@ const Chats = {
             <div class="message-meta">
                 <span class="message-time">${timeStr}</span>
                 ${editedStr}
+                ${statusHtml}
             </div>
         `;
 
         if (mediaHtml && this.currentChatSharedKey && !this.mediaProcessed.has(msg.id)) {
             this.mediaProcessed.add(msg.id);
             this._decryptAndDisplayMedia(div, msg, this.currentChatSharedKey);
+        }
+
+        if (this._messageObserver && !isOwn) {
+            this._messageObserver.observe(div);
         }
 
         div.addEventListener('contextmenu', (e) => this.showContextMenu(e, msg));
@@ -1438,6 +1508,31 @@ const Chats = {
         }
     },
 
+    observeMessages() {
+        if (!this._messageObserver) {
+            this._messageObserver = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        const msgDiv = entry.target;
+                        const messageId = msgDiv.dataset.messageId;
+                        const senderId = msgDiv.dataset.senderId;
+                        const statusEl = msgDiv.querySelector('.message-status');
+                        if (senderId !== Api.userId && statusEl && !statusEl.classList.contains('read')) {
+                            statusEl.classList.add('read');
+                            Api.post(`/chats/${this.currentChatId}/messages/${messageId}/read`)
+                            .catch(e => console.error('Failed to mark read', e));
+                            this._messageObserver.unobserve(msgDiv);
+                        }
+                    }
+                });
+            }, { threshold: 0.5 });
+        }
+
+        document.querySelectorAll('.message[data-message-id]').forEach(msgDiv => {
+            this._messageObserver.observe(msgDiv);
+        });
+    },
+
     updateFileProgress(fileName, percent) {
         const previewItems = document.querySelectorAll('.preview-item');
         previewItems.forEach(item => {
@@ -1708,9 +1803,7 @@ const Chats = {
         };
 
         ws.onclose = (event) => {
-            console.log('WebSocket disconnected', event.reason);
             if (event.code !== 1000) {
-                console.log('Reconnecting in 5s...');
                 setTimeout(() => this.connectWebSocket(), 5000);
             }
         };
@@ -1734,6 +1827,12 @@ const Chats = {
                     break;
                 case 'message_deleted':
                     this.onMessageDeleted(payload);
+                    break;
+                case 'message_delivered':
+                    this.onMessageDelivered(payload);
+                    break;
+                case 'messages_read':
+                    this.onMessagesRead(payload);
                     break;
                 case 'typing':
                     this.onTyping(payload);
@@ -1763,6 +1862,13 @@ const Chats = {
 
     onNewMessage(msg) {
         this.loadChats();
+
+        if (msg.sender_id !== Api.userId) {
+            Api.post(`/chats/${msg.chat_id}/messages/${msg.id}/delivered`)
+                .catch(e => console.error('Failed to mark delivered', e));
+        } else {
+            msg.status = 'sent';
+        }
         if (this.currentChatId !== msg.chat_id) return;
 
         const key = this.chatKeys[msg.chat_id] || this.currentChatSharedKey;
@@ -1773,7 +1879,9 @@ const Chats = {
                 msg.text = plain;
                 this.appendMessage(msg);
                 const list = document.getElementById('messages-list');
-                if (list) list.scrollTop = list.scrollHeight;
+                if (msg.sender_id === Api.userId || (list.scrollTop + list.clientHeight >= list.scrollHeight - 50)) {
+                    if (list) list.scrollTop = list.scrollHeight;
+                }
                 if (['image', 'video', 'file'].includes(msg.content_type) && !this.mediaProcessed.has(msg.id)) {
                     this.mediaProcessed.add(msg.id);
                     const msgEl = document.querySelector(`.message[data-message-id="${msg.id}"]`);
@@ -1784,6 +1892,7 @@ const Chats = {
     },
 
     onMessageUpdated(payload) {
+        this.renderLastMessage(payload.chat_id);
         if (this.currentChatId !== payload.chat_id) return;
 
         const msgDiv = document.querySelector(`.message[data-message-id="${payload.id}"]`);
@@ -1828,6 +1937,7 @@ const Chats = {
     },
 
     onMessageDeleted(payload) {
+        this.loadChats();
         if (this.currentChatId !== payload.chat_id) return;
 
         const msgDiv = document.querySelector(`.message[data-message-id="${payload.message_id}"]`);
@@ -1837,7 +1947,35 @@ const Chats = {
         msgDiv.addEventListener('animationend', () => {
             if (msgDiv.parentNode) msgDiv.parentNode.removeChild(msgDiv);
         });
-        this.loadChats(); 
+    },
+
+    onMessageDelivered(payload) {
+        const chat = this.chats.find(c => c.id === payload.chat_id);
+        if (chat) chat.last_message.status = 'delivered';
+        this.renderLastMessage(payload.chat_id);
+        if (this.currentChatId !== payload.chat_id) return;
+        const msgDiv = document.querySelector(`.message[data-message-id="${payload.message_id}"]`);
+        if (msgDiv) {
+            const statusEl = msgDiv.querySelector('.message-status');
+            if (statusEl) {
+                statusEl.textContent = '✓';
+                statusEl.className = 'message-status delivered';
+            }
+        }
+    },
+
+    onMessagesRead(payload) {
+        const chat = this.chats.find(c => c.id === payload.chat_id);
+        if (chat) chat.last_message.status = 'read';
+        this.renderLastMessage(payload.chat_id);
+        if (this.currentChatId !== payload.chat_id) return;
+        document.querySelectorAll('.message.own').forEach(msgDiv => {
+            const statusEl = msgDiv.querySelector('.message-status');
+            if (statusEl) {
+                statusEl.textContent = '✓✓';
+                statusEl.className = 'message-status read';
+            }
+        });
     },
 
     onTyping(payload) {
@@ -1894,6 +2032,7 @@ const Chats = {
         this.chats.forEach(chat => {
             if (chat.other_user && chat.other_user.id === payload.user_id) {
                 chat.other_user.profile_photo_url = payload.profile_photo_url || null;
+                this.renderChatInfo(chat.id);
             }
             if (chat.members) {
                 chat.members.forEach(m => {
@@ -1930,7 +2069,6 @@ const Chats = {
         msgAvatars.forEach(container => {
             this.loadAvatar(container, payload.user_id, payload.profile_photo_url);
         });
-        this.renderChatList();
     },
 };
 
