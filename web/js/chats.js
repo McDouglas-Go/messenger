@@ -8,6 +8,9 @@ const Chats = {
     chatKeys: {},
     mediaProcessed: new Set(),
     mediaUrlCache: new Map(),
+    currentOffset: 0,
+    allMessagesLoaded: false,
+    isLoadingMessage: false,
 
     async init() {
         await this.loadChats();
@@ -170,16 +173,19 @@ const Chats = {
         if (this.currentChatId === chatId) return;
         this.currentChatId = chatId;
         this.currentChatSharedKey = null;
+        this.currentOffset = 0;
+        this.allMessagesLoaded = false;
+        this.isLoadingMessage = false;
         if (this._messageObserver) {
             this._messageObserver.disconnect();
             this._messageObserver = null;
         }
+        this.hideInfoPanel();
         const activeChat = document.querySelector('#chat-list .active');
         if (activeChat) activeChat.classList.remove('active');
         const activeLi = document.getElementById(`chat-${this.currentChatId}`);
         if (activeLi) activeLi.classList.add('active');
         await this.renderChatItem(chatId);
-        this.hideInfoPanel();
         await this.loadChatDetail(chatId);
         await this.loadMessages(chatId);
     },
@@ -880,13 +886,21 @@ const Chats = {
         }
     },
 
-    async loadMessages(chatId) {
+    async loadMessages(chatId, append = false) {
         const main = document.getElementById('main');
-        main.classList.remove('chat-open');
-        main.innerHTML = '<div class="loading">Loading messages…</div>';
+        if (!append) {
+            main.classList.remove('chat-open');
+            main.innerHTML = '<div class="loading">Loading messages…</div>';
+        }
 
         try {
-            const messages = await Api.getMessages(chatId);
+            const messages = await Api.getMessages(chatId, 50, this.currentOffset);
+            if (!append) {
+                messages.reverse(); 
+                this.currentOffset = 0;
+            }
+            this.currentOffset += messages.length;
+            if (messages.length < 50) this.allMessagesLoaded = true;
             const decryptedMessages = [];
             for (const m of messages) {
                 let text = null;
@@ -903,114 +917,137 @@ const Chats = {
                     decryptedMessages.push(m);
                 }
             }
-            this.renderMessages(decryptedMessages);
+            this.renderMessages(decryptedMessages, append);
         } catch (err) {
             main.innerHTML = `<div class="error">Failed to load messages: ${err.message}</div>`;
         }
     },
 
-    renderMessages(messages) {
+    async loadMoreMessages(list) {
+        if (this.allMessagesLoaded || this.isLoadingMessage) return;
+        this.isLoadingMessage = true;
+        const oldScrollHeight = list.scrollHeight;
+        await this.loadMessages(this.currentChatId, true);
+        const newScrollHeight = list.scrollHeight;
+        list.scrollTop = newScrollHeight - oldScrollHeight;
+        this.isLoadingMessage = false;
+        this.updateFloatingDate();
+    },
+
+    renderMessages(messages, append = false) {
         const main = document.getElementById('main');
-        main.classList.add('chat-open');
-        main.innerHTML = `
-            <div id="chat-header"></div>
-            <div id="messages-container">
-                <div id="messages-list"></div>
-                <div id="typing-indicator" class="typing-indicator" style="display:none;"></div>
-                <form id="message-form">
-                    <button type="button" id="attach-btn" title="Attach file">📎</button>
-                    <input type="file" id="file-input" accept="image/*,video/*,.pdf,.doc,.docx" style="display:none" multiple>
-                    <input type="text" id="message-input" placeholder="Message…" autocomplete="off" disabled>
-                    <div class="send-btn-container" id="send-btn-container">
-                        <button type="submit" id="send-message-btn" disabled>
-                            <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-                        </button>
-                    </div>
-                </form>
-            </div>
-            <div id="chat-info-panel" class="chat-info-panel"></div>
-        `;
+        if (!append) {
+            main.classList.add('chat-open');
+            main.innerHTML = `
+                <div id="chat-header"></div>
+                <div id="messages-container">
+                    <div id="floating-date" class="floating-date"></div>
+                    <div id="messages-list"></div>
+                    <div id="typing-indicator" class="typing-indicator" style="display:none;"></div>
+                    <form id="message-form">
+                        <button type="button" id="attach-btn" title="Attach file">📎</button>
+                        <input type="file" id="file-input" accept="image/*,video/*,.pdf,.doc,.docx" style="display:none" multiple>
+                        <input type="text" id="message-input" placeholder="Message…" autocomplete="off" disabled>
+                        <div class="send-btn-container" id="send-btn-container">
+                            <button type="submit" id="send-message-btn" disabled>
+                                <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                <div id="chat-info-panel" class="chat-info-panel"></div>
+            `;
 
-        const list = document.getElementById('messages-list');
-        let lastDateLabel = null;
-        messages.forEach(msg => {
-            const currentDateLabel = this._getDateLabel(msg.sent_at);
-            if (currentDateLabel !== lastDateLabel) {
-                const sep = document.createElement('div');
-                sep.className = 'date-separator';
-                sep.textContent = currentDateLabel;
-                list.appendChild(sep);
-                lastDateLabel = currentDateLabel;
+            const attachBtn = document.getElementById('attach-btn');
+            const fileInput = document.getElementById('file-input');
+
+            if (attachBtn && fileInput) {
+                attachBtn.addEventListener('click', () => {
+                    fileInput.click();
+                });
+                fileInput.addEventListener('change', () => {
+                    this.handleFilesSelect(fileInput.files);
+                    this.updateSendBtn();
+                });
             }
-            this.appendMessage(msg, list);
-        });
-        const attachBtn = document.getElementById('attach-btn');
-        const fileInput = document.getElementById('file-input');
 
-        if (attachBtn && fileInput) {
-            attachBtn.addEventListener('click', () => {
-                fileInput.click();
-            });
-            fileInput.addEventListener('change', () => {
-                this.handleFilesSelect(fileInput.files);
-                this.updateSendBtn();
-            });
-        }
+            const msgInput = document.getElementById('message-input');
 
-        const msgInput = document.getElementById('message-input');
-
-        if (msgInput) {
-            if (!this.currentChatSharedKey) {
-                msgInput.disabled = true;
-                msgInput.placeholder = 'Waiting for encryption keys…';
-            } else {
-                msgInput.disabled = false;
-                msgInput.placeholder = 'Message…';
+            if (msgInput) {
+                if (!this.currentChatSharedKey) {
+                    msgInput.disabled = true;
+                    fileInput.disabled = true;
+                    msgInput.placeholder = 'Waiting for encryption keys…';
+                } else {
+                    msgInput.disabled = false;
+                    fileInput.disabled = false;
+                    msgInput.placeholder = 'Message…';
+                }
             }
-        }
 
-        const form = document.getElementById('message-form');
-        if (form) {
-            form.onsubmit = (e) => {
-                e.preventDefault();
-                this.sendMessage();
-            };
-        }
+            const form = document.getElementById('message-form');
+            if (form) {
+                form.onsubmit = (e) => {
+                    e.preventDefault();
+                    this.sendMessage();
+                };
+            }
 
-        let typingTimer;
-        if (msgInput) {
-            msgInput.addEventListener('input', () => {
-                this.updateSendBtn();
-                if (!Chats.ws || Chats.ws.readyState !== WebSocket.OPEN) return;
-                Chats.ws.send(JSON.stringify({
-                    event: 'typing',
-                    data: { chat_id: Chats.currentChatId }
-                }));
-                clearTimeout(typingTimer);
-                typingTimer = setTimeout(() => {
+            let typingTimer;
+            if (msgInput) {
+                msgInput.addEventListener('input', () => {
+                    this.updateSendBtn();
+                    if (!Chats.ws || Chats.ws.readyState !== WebSocket.OPEN) return;
+                    Chats.ws.send(JSON.stringify({
+                        event: 'typing',
+                        data: { chat_id: Chats.currentChatId }
+                    }));
+                    clearTimeout(typingTimer);
+                    typingTimer = setTimeout(() => {
+                        if (Chats.ws && Chats.ws.readyState === WebSocket.OPEN) {
+                            Chats.ws.send(JSON.stringify({
+                                event: 'stop_typing',
+                                data: { chat_id: Chats.currentChatId }
+                            }));
+                        }
+                    }, 2000);
+                });
+
+                msgInput.addEventListener('keydown', () => {
+                    clearTimeout(typingTimer);
                     if (Chats.ws && Chats.ws.readyState === WebSocket.OPEN) {
                         Chats.ws.send(JSON.stringify({
                             event: 'stop_typing',
                             data: { chat_id: Chats.currentChatId }
                         }));
                     }
-                }, 2000);
-            });
+                });
+            }
+            this.renderChatHeader();
+        }
+        const list = document.getElementById('messages-list');
+        if (!list) return;
 
-            msgInput.addEventListener('keydown', () => {
-                clearTimeout(typingTimer);
-                if (Chats.ws && Chats.ws.readyState === WebSocket.OPEN) {
-                    Chats.ws.send(JSON.stringify({
-                        event: 'stop_typing',
-                        data: { chat_id: Chats.currentChatId }
-                    }));
+        const elementsToInsert = [];
+        messages.forEach(msg => {
+            const msgElement = this.appendMessage(msg, null);
+            if (msgElement) elementsToInsert.push(msgElement);
+        });
+
+        if (append) {
+            elementsToInsert.forEach(el => list.insertBefore(el, list.firstChild));
+        } else  {
+            elementsToInsert.forEach(el => list.appendChild(el));
+            list.scrollTop = list.scrollHeight;
+            this.observeMessages();
+            this.updateFloatingDate();
+            list.addEventListener('scroll', () => {
+                if (list.scrollTop === 0 && !this.allMessagesLoaded && !this.isLoadingMessages) {
+                    this.loadMoreMessages(list);
                 }
+                this.updateFloatingDate();
             });
         }
-
-        this.renderChatHeader();
-        if (list) list.scrollTop = list.scrollHeight;
-        this.observeMessages();
     },
 
     updateSendBtn() {
@@ -1028,6 +1065,27 @@ const Chats = {
             btn.classList.remove('visible');
             btn.disabled = true;
         }
+    },
+
+    updateFloatingDate() {
+        const list = document.getElementById('messages-list');
+        const indicator = document.getElementById('floating-date');
+        if (!list || !indicator) return;
+
+        const messages = list.querySelectorAll('.message-wrapper, .message');
+        let topMessageDate = '';
+        for (const msg of messages) {
+            const rect = msg.getBoundingClientRect();
+            const containerRect = list.getBoundingClientRect();
+            if (((rect.top + rect.bottom) / 2) > containerRect.top) {
+                const el = msg.classList.contains('message-wrapper') ? msg : msg.querySelector('.message') || msg;
+                const sentAt = el.dataset.sentAt;
+                if (sentAt) topMessageDate = this._getDateLabel(sentAt);
+                break;
+            }
+        }
+        indicator.textContent = topMessageDate;
+        indicator.style.display = topMessageDate ? 'block' : 'none';
     },
 
     handleFilesSelect(fileList) {
@@ -1111,10 +1169,11 @@ const Chats = {
 
         const isOwn = (Api.userId && msg.sender_id === Api.userId);
         const isGroup = this.currentChatDetail && this.currentChatDetail.chat.type === 'group';
-        const wrapper = document.createElement('div');
-        wrapper.className = 'message-wrapper' + (isOwn ? ' own' : '');
+        let wrapper = null;
 
         if (isGroup && !isOwn) {
+            wrapper = document.createElement('div');
+            wrapper.className = 'message-wrapper';
             const avatarDiv = document.createElement('div');
             avatarDiv.className = 'message-avatar';
             avatarDiv.dataset.userId = msg.sender_id;
@@ -1194,9 +1253,16 @@ const Chats = {
         }
 
         div.addEventListener('contextmenu', (e) => this.showContextMenu(e, msg));
-        wrapper.appendChild(div);
-        container.appendChild(wrapper);
-        return div;
+        if (wrapper) {
+            wrapper.dataset.sentAt = msg.sent_at;
+            wrapper.appendChild(div);
+            container.appendChild(wrapper);
+            return wrapper;
+        } else {
+            div.dataset.sentAt = msg.sent_at;
+            container.appendChild(div);
+            return div;
+        }
     },
 
     async downloadAndDecryptFile(mediaId, mimeType, key) {
@@ -1879,7 +1945,7 @@ const Chats = {
                 msg.text = plain;
                 this.appendMessage(msg);
                 const list = document.getElementById('messages-list');
-                if (msg.sender_id === Api.userId || (list.scrollTop + list.clientHeight >= list.scrollHeight - 50)) {
+                if (msg.sender_id === Api.userId || (list.scrollTop + list.clientHeight >= list.scrollHeight - 150)) {
                     if (list) list.scrollTop = list.scrollHeight;
                 }
                 if (['image', 'video', 'file'].includes(msg.content_type) && !this.mediaProcessed.has(msg.id)) {

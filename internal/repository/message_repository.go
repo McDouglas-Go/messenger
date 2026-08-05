@@ -65,7 +65,7 @@ func (r *pgMessageRepository) GetChatMessages(ctx context.Context, chatID string
         SELECT id, chat_id, sender_id, encrypted_content, nonce, content_type, status, sent_at, edited_at
         FROM messages
         WHERE chat_id = $1
-        ORDER BY sent_at ASC
+        ORDER BY sent_at DESC
         LIMIT $2 OFFSET $3`
 
 	rows, err := r.pool.Query(ctx, query, chatID, limit, offset)
