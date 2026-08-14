@@ -10,26 +10,32 @@ import (
 
 	"github.com/McDouglas-Go/messenger/internal/middleware"
 	"github.com/McDouglas-Go/messenger/internal/model"
+	"github.com/McDouglas-Go/messenger/internal/repository"
 	"github.com/McDouglas-Go/messenger/internal/service"
 	"github.com/gorilla/mux"
 )
 
 type MessageHandler struct {
 	messageService service.MesssageService
+	userRepo       repository.UserRepository
+	baseURL        string
 	log            *slog.Logger
 }
 
-func Newmessagehandler(messageService service.MesssageService, logger *slog.Logger) *MessageHandler {
+func Newmessagehandler(messageService service.MesssageService, userRepo repository.UserRepository, baseURL string, logger *slog.Logger) *MessageHandler {
 	return &MessageHandler{
 		messageService: messageService,
+		userRepo:       userRepo,
+		baseURL:        baseURL,
 		log:            logger,
 	}
 }
 
 type sendMessageRequest struct {
-	EncryptedContent string `json:"encrypted_content"` // base64
-	Nonce            string `json:"nonce"`             // base64
-	ContentType      string `json:"content_type"`
+	EncryptedContent string  `json:"encrypted_content"` // base64
+	Nonce            string  `json:"nonce"`             // base64
+	ContentType      string  `json:"content_type"`
+	ReplyToID        *string `json:"reply_to_id,omitempty"`
 }
 
 type messageResponse struct {
@@ -42,31 +48,15 @@ type messageResponse struct {
 	Status           string  `json:"status"`
 	SentAt           string  `json:"sent_at"`
 	EditedAt         *string `json:"edited_at,omitempty"`
+	ReplyToID        *string `json:"reply_to_id,omitempty"`
+	ReplyPreview     *string `json:"reply_preview,omitempty"`
+	ReplySenderName  *string `json:"reply_sender_name,omitempty"`
 }
 
 type editMessageRequest struct {
 	EncryptedContent string `json:"encrypted_content"`
 	Nonce            string `json:"nonce"`
 	ContentType      string `json:"content_type"`
-}
-
-func MessageToResponse(msg *model.EncryptedMessage) messageResponse {
-	m := messageResponse{
-		ID:               msg.ID,
-		ChatID:           msg.ChatID,
-		SenderID:         msg.SenderID,
-		EncryptedContent: base64.StdEncoding.EncodeToString(msg.EncryptedContent),
-		Nonce:            base64.StdEncoding.EncodeToString(msg.Nonce),
-		Status:           string(msg.Status),
-		ContentType:      string(msg.ContentType),
-		SentAt:           msg.SentAt.Format(time.RFC3339),
-	}
-	if msg.EditedAt != nil {
-		s := msg.EditedAt.Format(time.RFC3339)
-		m.EditedAt = &s
-	}
-
-	return m
 }
 
 func (h *MessageHandler) Send(w http.ResponseWriter, r *http.Request) {
@@ -97,14 +87,39 @@ func (h *MessageHandler) Send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg := &model.EncryptedMessage{
+	var replyPreview *string
+	var replySenderName *string
+
+	if req.ReplyToID != nil {
+		original, err := h.messageService.GetByID(r.Context(), *req.ReplyToID, claims.UserID, chatID)
+		if err == nil && original != nil {
+			previewData := map[string]string{
+				"encrypted_content": base64.StdEncoding.EncodeToString(original.EncryptedContent),
+				"nonce":             base64.StdEncoding.EncodeToString(original.Nonce),
+			}
+			previewBytes, _ := json.Marshal(previewData)
+			previewStr := string(previewBytes)
+			replyPreview = &previewStr
+			originalSender, err := h.userRepo.GetByID(r.Context(), original.SenderID)
+			if err == nil && originalSender != nil {
+				name := originalSender.DisplayName
+				replySenderName = &name
+			}
+		}
+	}
+
+	input := service.SendMessageInput{
 		ChatID:           chatID,
 		EncryptedContent: encryptedContent,
 		Nonce:            nonce,
 		ContentType:      model.ContentType(req.ContentType),
+		ReplyToID:        req.ReplyToID,
+		ReplyPreview:     replyPreview,
+		ReplySenderName:  replySenderName,
 	}
 
-	if err := h.messageService.Send(r.Context(), claims.UserID, msg); err != nil {
+	msg, err := h.messageService.Send(r.Context(), claims.UserID, input)
+	if err != nil {
 		h.log.Error("failed to send message", "error", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -119,6 +134,9 @@ func (h *MessageHandler) Send(w http.ResponseWriter, r *http.Request) {
 		Status:           string(msg.Status),
 		ContentType:      string(msg.ContentType),
 		SentAt:           msg.SentAt.Format(time.RFC3339),
+		ReplyToID:        msg.ReplyToID,
+		ReplyPreview:     replyPreview,
+		ReplySenderName:  replySenderName,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -145,6 +163,15 @@ func (h *MessageHandler) GetChatHistory(w http.ResponseWriter, r *http.Request) 
 		offset = 0
 	}
 
+	embedParams := r.URL.Query()["embed"]
+	embedReply := false
+	for _, p := range embedParams {
+		switch p {
+		case "reply_preview":
+			embedReply = true
+		}
+	}
+
 	messages, err := h.messageService.GetChatHistory(r.Context(), chatID, claims.UserID, limit, offset)
 	if err != nil {
 		h.log.Error("failed to get messages", "error", err)
@@ -160,7 +187,7 @@ func (h *MessageHandler) GetChatHistory(w http.ResponseWriter, r *http.Request) 
 			editedAt = &t
 		}
 
-		resp = append(resp, messageResponse{
+		mr := messageResponse{
 			ID:               msg.ID,
 			ChatID:           msg.ChatID,
 			SenderID:         msg.SenderID,
@@ -170,11 +197,32 @@ func (h *MessageHandler) GetChatHistory(w http.ResponseWriter, r *http.Request) 
 			Status:           string(msg.Status),
 			SentAt:           msg.SentAt.Format(time.RFC3339),
 			EditedAt:         editedAt,
-		})
+			ReplyToID:        msg.ReplyToID,
+		}
+
+		if embedReply && msg.ReplyToID != nil {
+			original, err := h.messageService.GetByID(r.Context(), *msg.ReplyToID, claims.UserID, msg.ChatID)
+			if err == nil && original != nil {
+				previewData := map[string]string{
+					"encrypted_content": base64.StdEncoding.EncodeToString(original.EncryptedContent),
+					"nonce":             base64.StdEncoding.EncodeToString(original.Nonce),
+				}
+				previewBytes, _ := json.Marshal(previewData)
+				previewStr := string(previewBytes)
+				mr.ReplyPreview = &previewStr
+
+				originalSender, err := h.userRepo.GetByID(r.Context(), original.SenderID)
+				if err == nil && originalSender != nil {
+					name := originalSender.DisplayName
+					mr.ReplySenderName = &name
+				}
+			}
+		}
+		resp = append(resp, mr)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		slog.Error("failed to encode response", "error", err)
 	}
@@ -270,6 +318,7 @@ func (h *MessageHandler) EditMessage(w http.ResponseWriter, r *http.Request) {
 		Status:           string(updatedMsg.Status),
 		ContentType:      string(updatedMsg.ContentType),
 		SentAt:           updatedMsg.SentAt.Format(time.RFC3339),
+		ReplyToID:        updatedMsg.ReplyToID,
 	}
 	if updatedMsg.EditedAt != nil {
 		t := updatedMsg.EditedAt.Format(time.RFC3339)

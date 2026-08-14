@@ -2,17 +2,29 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/McDouglas-Go/messenger/internal/model"
 	"github.com/McDouglas-Go/messenger/internal/repository"
 	"github.com/McDouglas-Go/messenger/internal/ws"
 )
 
+type SendMessageInput struct {
+	ChatID           string
+	EncryptedContent []byte
+	Nonce            []byte
+	ContentType      model.ContentType
+	ReplyToID        *string
+	ReplyPreview     *string
+	ReplySenderName  *string
+}
+
 type MesssageService interface {
-	Send(ctx context.Context, senderID string, msg *model.EncryptedMessage) error
+	Send(ctx context.Context, senderID string, input SendMessageInput) (*model.EncryptedMessage, error)
 	GetByID(ctx context.Context, messageID, userID, chatID string) (*model.EncryptedMessage, error)
 	GetChatHistory(ctx context.Context, chatID, userID string, limit, offset int) ([]*model.EncryptedMessage, error)
 	MarkDelivered(ctx context.Context, messageID string) error
@@ -48,10 +60,10 @@ func NewMessageService(
 	}
 }
 
-func (s *messageService) Send(ctx context.Context, senderID string, msg *model.EncryptedMessage) error {
-	members, err := s.chatRepo.GetChatMembers(ctx, msg.ChatID)
+func (s *messageService) Send(ctx context.Context, senderID string, input SendMessageInput) (*model.EncryptedMessage, error) {
+	members, err := s.chatRepo.GetChatMembers(ctx, input.ChatID)
 	if err != nil {
-		return fmt.Errorf("get chat members: %w", err)
+		return nil, fmt.Errorf("get chat members: %w", err)
 	}
 
 	isMember := false
@@ -62,23 +74,45 @@ func (s *messageService) Send(ctx context.Context, senderID string, msg *model.E
 		}
 	}
 	if !isMember {
-		return errors.New("sender is not a member of the chat")
+		return nil, errors.New("sender is not a member of the chat")
 	}
 
-	msg.SenderID = senderID
+	msg := &model.EncryptedMessage{
+		ChatID:           input.ChatID,
+		SenderID:         senderID,
+		EncryptedContent: input.EncryptedContent,
+		Nonce:            input.Nonce,
+		ContentType:      input.ContentType,
+		ReplyToID:        input.ReplyToID,
+		Status:           model.StatusSent,
+	}
 
 	if err := s.msgRepo.Create(ctx, msg); err != nil {
-		return fmt.Errorf("create message: %w", err)
-	}
-	event := map[string]interface{}{
-		"event": "new_message",
-		"data":  msg,
-	}
-	for _, member := range members {
-		s.hub.SendToUser(member.UserID, event)
+		return nil, fmt.Errorf("create message: %w", err)
 	}
 
-	return nil
+	wsMsg := map[string]interface{}{
+		"event": "new_message",
+		"data": map[string]interface{}{
+			"id":                msg.ID,
+			"chat_id":           msg.ChatID,
+			"sender_id":         msg.SenderID,
+			"encrypted_content": base64.StdEncoding.EncodeToString(msg.EncryptedContent),
+			"nonce":             base64.StdEncoding.EncodeToString(msg.Nonce),
+			"content_type":      string(msg.ContentType),
+			"status":            string(msg.Status),
+			"sent_at":           msg.SentAt.Format(time.RFC3339),
+			"reply_to_id":       msg.ReplyToID,
+			"reply_preview":     input.ReplyPreview,
+			"reply_sender_name": input.ReplySenderName,
+		},
+	}
+
+	for _, member := range members {
+		s.hub.SendToUser(member.UserID, wsMsg)
+	}
+
+	return msg, nil
 }
 
 func (s *messageService) GetByID(ctx context.Context, messageID, userID, chatID string) (*model.EncryptedMessage, error) {

@@ -114,14 +114,19 @@ const Api = {
     createGroupChat(name, memberIds) { 
         return this.post('/chats/group', { name, member_ids: memberIds }); 
     },
-    getMessages(chatId, limit = 50, offset = 0) {
-        return this.get(`/chats/${chatId}/messages?limit=${limit}&offset=${offset}`);
+    getMessages(chatId, limit = 50, offset = 0, embed = []) {
+        let url = `/chats/${chatId}/messages?limit=${limit}&offset=${offset}`;
+        embed.forEach(param => {
+            url += `&embed=${encodeURIComponent(param)}`;
+        })
+        return this.get(url);
     },
-    sendMessage(chatId, encryptedContent, nonce, contentType) {
+    sendMessage(chatId, encryptedContent, nonce, contentType, replyToId = null) {
         return this.post(`/chats/${chatId}/messages`, {
             encrypted_content: encryptedContent,
             nonce: nonce,
             content_type: contentType,
+            reply_to_id: replyToId,
         });
     },
     editMessage(chatId, messageId, encryptedContent, nonce, contentType) {

@@ -11,6 +11,7 @@ const Chats = {
     currentOffset: 0,
     allMessagesLoaded: false,
     isLoadingMessage: false,
+    replyToMsg: null,
 
     async init() {
         await this.loadChats();
@@ -886,15 +887,34 @@ const Chats = {
         }
     },
 
+    scrollToBottom(list) {
+        const scrollBtn = document.getElementById('scroll-to-bottom-btn');
+        if (!scrollBtn || !list) return;
+        scrollBtn.addEventListener('click', () => {
+            list.scrollTo({top: list.scrollHeight, behavior: 'smooth'});
+        });
+        const updateBtnVisibility = () => {
+            const distanceToBottom = list.scrollHeight - list.scrollTop - list.clientHeight;
+            if (distanceToBottom > 200) {
+                scrollBtn.classList.add('visible');
+            } else {
+                scrollBtn.classList.remove('visible');
+            }
+        };
+        list.addEventListener('scroll', updateBtnVisibility);
+        updateBtnVisibility;
+    },
+
     async loadMessages(chatId, append = false) {
         const main = document.getElementById('main');
         if (!append) {
             main.classList.remove('chat-open');
             main.innerHTML = '<div class="loading">Loading messages…</div>';
         }
+        const embed = ['reply_preview'];
 
         try {
-            const messages = await Api.getMessages(chatId, 50, this.currentOffset);
+            const messages = await Api.getMessages(chatId, 50, this.currentOffset, embed);
             if (!append) {
                 messages.reverse(); 
                 this.currentOffset = 0;
@@ -930,6 +950,7 @@ const Chats = {
         await this.loadMessages(this.currentChatId, true);
         const newScrollHeight = list.scrollHeight;
         list.scrollTop = newScrollHeight - oldScrollHeight;
+        this.scrollToBottom(list);
         this.isLoadingMessage = false;
         this.updateFloatingDate();
     },
@@ -941,8 +962,12 @@ const Chats = {
             main.innerHTML = `
                 <div id="chat-header"></div>
                 <div id="messages-container">
-                    <div id="floating-date" class="floating-date"></div>
-                    <div id="messages-list"></div>
+                    <div id="messages-list">
+                        <div id="floating-date-wrapper">
+                            <div id="floating-date" class="floating-date"></div>
+                        </div>
+                    </div>
+                    <button id="scroll-to-bottom-btn" class="scroll-to-bottom-btn">︾ ︾ ︾</button>
                     <div id="typing-indicator" class="typing-indicator" style="display:none;"></div>
                     <form id="message-form">
                         <button type="button" id="attach-btn" title="Attach file">📎</button>
@@ -1029,24 +1054,75 @@ const Chats = {
         if (!list) return;
 
         const elementsToInsert = [];
+        let lastDateLabel = null;
+        if (append) {
+            const existingChildren = list.children;
+            for (let i = 0; i <= existingChildren.length; i++) {
+                const el = existingChildren[i];
+                if (el.classList.contains('date-separator')) {
+                    lastDateLabel = el.textContent;
+                    break;
+                }
+                const msgEl = el.classList.contains('message-wrapper') ? el.querySelector('.message') : el;
+                if (msgEl && msgEl.dataset.sentAt) {
+                    lastDateLabel = this._getDateLabel(msgEl.dataset.sentAt);
+                    break;
+                }
+            }
+        }
         messages.forEach(msg => {
+            const currentDateLabel = this._getDateLabel(msg.sent_at);
+            if (currentDateLabel !== lastDateLabel) {
+                const sep = document.createElement('div');
+                sep.className = 'date-separator';
+                sep.textContent = currentDateLabel;
+                elementsToInsert.push(sep);
+                lastDateLabel = currentDateLabel;
+            }
             const msgElement = this.appendMessage(msg, null);
             if (msgElement) elementsToInsert.push(msgElement);
         });
 
+        const floatingWrapper = document.getElementById('floating-date-wrapper');
         if (append) {
-            elementsToInsert.forEach(el => list.insertBefore(el, list.firstChild));
+            const insertBeforeEl = floatingWrapper ? floatingWrapper.nextElementSibling : list.firstChild;
+            for (let i = elementsToInsert.length - 1; i >= 0; i--) {
+                list.insertBefore(elementsToInsert[i], insertBeforeEl);
+            }
         } else  {
             elementsToInsert.forEach(el => list.appendChild(el));
             list.scrollTop = list.scrollHeight;
             this.observeMessages();
             this.updateFloatingDate();
+            this.scrollToBottom(list);
+            const floatingDate = document.getElementById('floating-date');
+            let hideTimeout;
             list.addEventListener('scroll', () => {
-                if (list.scrollTop === 0 && !this.allMessagesLoaded && !this.isLoadingMessages) {
+                if (list.scrollTop === 0 && !this.allMessagesLoaded && !this.isLoadingMessage) {
                     this.loadMoreMessages(list);
                 }
                 this.updateFloatingDate();
             });
+        }
+        this.cleanupDateSeparators(list);
+        this._decryptReplyPreviews(messages);
+    },
+
+    cleanupDateSeparators(list) {
+        const children = Array.from(list.children);
+        for (let i = 1; i < children.length; i++) {
+            const prev = children[i - 1];
+            const curr = children[i];
+            if (prev.classList.contains('date-separator') && curr.classList.contains('date-separator') && prev.textContent === curr.textContent) {
+                prev.remove();
+                children.splice(i - 1, 1);
+                i--;
+            }
+        }
+        const firstMessage = list.querySelector('.message, .message-wrapper');
+        const firstSeparator = list.querySelector('.date-separator');
+        if (firstSeparator && firstMessage && firstSeparator.compareDocumentPosition(firstMessage) & Node.DOCUMENT_POSITION_FOLLOWING) {
+            firstSeparator.remove();
         }
     },
 
@@ -1077,7 +1153,7 @@ const Chats = {
         for (const msg of messages) {
             const rect = msg.getBoundingClientRect();
             const containerRect = list.getBoundingClientRect();
-            if (((rect.top + rect.bottom) / 2) > containerRect.top) {
+            if (rect.bottom > containerRect.top) {
                 const el = msg.classList.contains('message-wrapper') ? msg : msg.querySelector('.message') || msg;
                 const sentAt = el.dataset.sentAt;
                 if (sentAt) topMessageDate = this._getDateLabel(sentAt);
@@ -1086,6 +1162,14 @@ const Chats = {
         }
         indicator.textContent = topMessageDate;
         indicator.style.display = topMessageDate ? 'block' : 'none';
+
+        const separators = document.querySelectorAll('.date-separator');
+        const indicatorRect = indicator.getBoundingClientRect();
+        separators.forEach(sep => {
+            const sepRect = sep.getBoundingClientRect();
+            const isIntersecting = !(sepRect.bottom < indicatorRect.top || sepRect.top > indicatorRect.bottom);
+            sep.classList.toggle('hidden', isIntersecting);
+        });
     },
 
     handleFilesSelect(fileList) {
@@ -1165,31 +1249,34 @@ const Chats = {
 
     appendMessage(msg, container = null) {
         if (!container) container = document.getElementById('messages-list');
-        if (!container) return;
+        if (!container) return null;
 
         const isOwn = (Api.userId && msg.sender_id === Api.userId);
         const isGroup = this.currentChatDetail && this.currentChatDetail.chat.type === 'group';
+        let member = null;
         let wrapper = null;
 
         if (isGroup && !isOwn) {
+            member = this.currentChatDetail?.members.find(m => m.user_id === msg.sender_id)
             wrapper = document.createElement('div');
             wrapper.className = 'message-wrapper';
             const avatarDiv = document.createElement('div');
             avatarDiv.className = 'message-avatar';
             avatarDiv.dataset.userId = msg.sender_id;
+            this.loadAvatar(avatarDiv, msg.sender_id, member.profile_photo_url);
             wrapper.appendChild(avatarDiv);
-
-            const member = this.currentChatDetail?.members.find(m => m.user_id === msg.sender_id);
-            if (member) {
-                this.loadAvatar(avatarDiv, msg.sender_id, member.profile_photo_url);
-            }
         }
 
         const div = document.createElement('div');
         div.className = 'message ' + (isOwn ? 'own' : '');
         div.setAttribute('data-message-id', msg.id);
         div.dataset.senderId = msg.sender_id;
-
+        const replyBlockHtml = msg.reply_to_id
+            ? `<div class="reply-block" data-reply-id="${msg.reply_to_id}">
+                <span class="reply-sender">${escapeHtml(msg.reply_sender_name || 'Unknown')}</span>
+                <span class="reply-text">Decrypting...</span>
+            </div>`
+            : '';
         let mediaHtml = '';
         let displayText = '';
         if (['image', 'video', 'file'].includes(msg.content_type)) {
@@ -1216,8 +1303,7 @@ const Chats = {
             editedStr = `<span class="edited-at">edited at ${editedTime}</span>`;
         }
         let senderName = '';
-        if (this.currentChatDetail && this.currentChatDetail.chat.type === 'group' && msg.sender_id !== Api.userId) {
-            const member = this.currentChatDetail.members.find(m => m.user_id === msg.sender_id);
+        if (isGroup && !isOwn) {
             senderName = member ? (member.display_name || member.username) : 'Unknown';
         }
         let statusHtml = ''
@@ -1230,10 +1316,12 @@ const Chats = {
                 statusHtml = '<span class="message-status sent">✓</span>';
             }
         } else {
-            statusHtml = '<span class="message-status" style="display:none;"></span>';
+            const readClass = (msg.status === 'read') ? 'read' : '';
+            statusHtml = `<span class="message-status ${readClass}" style="display:none;"></span>`;
         }
         div.innerHTML = `
             ${senderName ? `<div class="sender-name">${escapeHtml(senderName)}</div>` : ''}
+            ${replyBlockHtml}
             ${mediaHtml}
             ${displayText ? `<div class="message-content">${escapeHtml(displayText)}</div>` : ''}
             <div class="message-meta">
@@ -1252,6 +1340,23 @@ const Chats = {
             this._messageObserver.observe(div);
         }
 
+        if (msg.reply_to_id) {
+            const replyBlock = div.querySelector('.reply-block');
+            if (replyBlock) {
+                replyBlock.addEventListener('click', () => {
+                    const original = document.querySelector(`.message[data-message-id="${msg.reply_to_id}"]`);
+                    if (original) {
+                        original.scrollIntoView({behavior: 'smooth', block: 'center'});
+                        original.style.transition = 'background 0.3s';
+                        original.style.background = '#e6f2ff';
+                        setTimeout(() => {
+                            original.style.background = '';
+                        }, 2000);
+                    }
+                });
+            }
+        }
+
         div.addEventListener('contextmenu', (e) => this.showContextMenu(e, msg));
         if (wrapper) {
             wrapper.dataset.sentAt = msg.sent_at;
@@ -1262,6 +1367,51 @@ const Chats = {
             div.dataset.sentAt = msg.sent_at;
             container.appendChild(div);
             return div;
+        }
+    },
+
+    async _decryptReplyPreviews(messages) {
+        for (const msg of messages) {
+            if (!msg.reply_to_id || !msg.reply_preview) continue;
+            const replyBlock = document.querySelector(`.message[data-message-id="${msg.id}"] .reply-block`);
+            if (!replyBlock) continue;
+            try {
+                const preview = JSON.parse(msg.reply_preview);
+                let replyText = '';
+                if (this.currentChatSharedKey) {
+                    const packed = CryptoModule.unpackEncryptedData({
+                        encrypted_content: preview.encrypted_content,
+                        nonce: preview.nonce
+                    });
+                    replyText = await CryptoModule.decrypt(this.currentChatSharedKey, packed);
+                }
+                let content = '';
+                if (replyText.startsWith('{')) {
+                    let mediaType = '';
+                    try {
+                        const data = JSON.parse(replyText);
+                        const mime = data.media_types ? data.media_types[0].split('/')[0] : 'file';
+                        if (mime === 'image') mediaType = '📷 Image';
+                        else if (mime === 'video') mediaType = '🎬 Video';
+                        else mediaType = '📄 File'
+                        if (data.text !== '') {
+                            content = `${mediaType} · ${data.text || ''}`.trim();
+                        } else {
+                            content = `${mediaType}`.trim();
+                        }
+                    } catch (e) {
+                        content = 'Media';
+                    }
+                } else {
+                    content = replyText;
+                }
+                replyBlock.innerHTML = `
+                    <span class="reply-sender">${escapeHtml(msg.reply_sender_name || 'Unknown')}</span>
+                    <span class="reply-text">${escapeHtml(content)}</span>
+                `;
+            } catch (e) {
+                console.error('Failed to decrypt reply preview', e);
+            }
         }
     },
 
@@ -1424,6 +1574,13 @@ const Chats = {
 
         const items = [];
 
+        if (msg.sender_id !== Api.userId) {
+            items.push({
+                text: 'Reply',
+                action: () => this.showReplyTo(msg)
+            });
+        }
+
         let textToCopy = msg.text;
         if (['image', 'video', 'file'].includes(msg.content_type) && textToCopy.startsWith('{')) {
             try {
@@ -1525,6 +1682,12 @@ const Chats = {
             if (sendBtn) sendBtn.disabled = false;
         }
 
+        let replyToId = null;
+        if (this.replyToMsg) {
+            replyToId = this.replyToMsg.id;
+            this.replyToMsg = null;
+        }
+
         let encryptedContent, nonce;
         if (text && this.currentChatSharedKey) {
             try {
@@ -1558,12 +1721,13 @@ const Chats = {
             }
         }
         try {
-            const sentMessage = await Api.sendMessage(this.currentChatId, encryptedContent, nonce, contentType);
+            const sentMessage = await Api.sendMessage(this.currentChatId, encryptedContent, nonce, contentType, replyToId);
             if (sentMessage && sentMessage.id && mediaIds.length > 0) {
                 for (const mediaId of mediaIds) {
                     await Api.put(`/media/${mediaId}`, { message_id: sentMessage.id });
                 }
             }
+            this.cancelReply();
             input.value = '';
             const previewContainer = document.getElementById('media-preview');
             if (previewContainer) previewContainer.innerHTML = '';
@@ -1597,6 +1761,58 @@ const Chats = {
         document.querySelectorAll('.message[data-message-id]').forEach(msgDiv => {
             this._messageObserver.observe(msgDiv);
         });
+    },
+
+    showReplyTo(msg) {
+        this.replyToMsg = msg;
+        let previewContainer = document.getElementById('reply-preview');
+        if (!previewContainer) {
+            previewContainer = document.createElement('div');
+            previewContainer.id = 'reply-preview';
+            previewContainer.className = 'reply-preview';
+            const form = document.getElementById('message-form');
+            form.parentNode.insertBefore(previewContainer, form);
+        }
+        let content = msg.text || '';
+        if (['image', 'video', 'file'].includes(msg.content_type)) {
+            if (msg.text && msg.text.startsWith('{')) {
+                let mediaType = '';
+                try {
+                    const data = JSON.parse(msg.text);
+                    const mime = data.media_types ? data.media_types[0].split('/')[0] : 'file';
+                    if (mime === 'image') mediaType = '📷 Image';
+                    else if (mime === 'video') mediaType = '🎬 Video';
+                    else mediaType = '📄 File'
+                    if (data.text !== '') {
+                        content = `${mediaType} · ${data.text || ''}`.trim();
+                    } else {
+                        content = `${mediaType}`.trim();
+                    }
+                } catch (e) {
+                    content = 'Media';
+                }
+            } else {
+                content = msg.content_type;
+            }
+        }
+        const member = this.currentChatDetail?.members.find(m => m.user_id === msg.sender_id);
+        previewContainer.innerHTML = `
+            <div class="reply-preview-content">
+                <span class="reply-preview-name">${escapeHtml(member ? (member.display_name || member.username) : 'Unknown')}</span>
+                <span class="reply-preview-text">${escapeHtml(content)}</span>
+            </div>
+            <button id="cancel-reply-btn" class="icon-btn">✕</button>
+        `;
+        previewContainer.style.display = 'flex';
+
+        document.getElementById('cancel-reply-btn').onclick = () => this.cancelReply();
+        document.getElementById('message-input').focus();
+    },
+
+    cancelReply() {
+        this.replyToMsg = null;
+        const preview = document.getElementById('reply-preview');
+        if (preview) preview.style.display = 'none';
     },
 
     updateFileProgress(fileName, percent) {
@@ -1943,16 +2159,30 @@ const Chats = {
             const packed = CryptoModule.unpackEncryptedData(msg);
             CryptoModule.decrypt(key, packed).then(plain => {
                 msg.text = plain;
-                this.appendMessage(msg);
+                const appendEl = this.appendMessage(msg);
                 const list = document.getElementById('messages-list');
+                if (appendEl) {
+                    const currentDate = this._getDateLabel(msg.sent_at);
+                    const allMessageEls = list ? Array.from(list.querySelectorAll('.message[data-sent-at]')) : [];
+                    const hasSameDate = allMessageEls.some(el => this._getDateLabel(el.dataset.sentAt) === currentDate);
+                    if (!hasSameDate) {
+                        const sep = document.createElement('div');
+                        sep.className = 'date-separator';
+                        sep.textContent = currentDate;
+                        appendEl.parentNode.insertBefore(sep, appendEl);
+                    }
+                }
+                if (list) this.cleanupDateSeparators(list);
                 if (msg.sender_id === Api.userId || (list.scrollTop + list.clientHeight >= list.scrollHeight - 150)) {
                     if (list) list.scrollTop = list.scrollHeight;
                 }
+                this.scrollToBottom(list);
                 if (['image', 'video', 'file'].includes(msg.content_type) && !this.mediaProcessed.has(msg.id)) {
                     this.mediaProcessed.add(msg.id);
                     const msgEl = document.querySelector(`.message[data-message-id="${msg.id}"]`);
                     if (msgEl) this._decryptAndDisplayMedia(msgEl, msg, key);
                 }
+                if (msg.reply_to_id) this._decryptReplyPreviews([msg]);
             });
         }
     },
@@ -2003,16 +2233,37 @@ const Chats = {
     },
 
     onMessageDeleted(payload) {
-        this.loadChats();
         if (this.currentChatId !== payload.chat_id) return;
 
         const msgDiv = document.querySelector(`.message[data-message-id="${payload.message_id}"]`);
         if (!msgDiv) return;
 
-        msgDiv.classList.add('deleting');
-        msgDiv.addEventListener('animationend', () => {
-            if (msgDiv.parentNode) msgDiv.parentNode.removeChild(msgDiv);
-        });
+        const wrapper = msgDiv.closest('.message-wrapper') || msgDiv;
+        wrapper.classList.add('deleting');
+        wrapper.addEventListener('animationend', () => {
+            const prevSep = wrapper.previousElementSibling;
+            const nextSep = wrapper.nextElementSibling;
+            if (wrapper.parentNode) wrapper.parentNode.removeChild(wrapper);
+            if (prevSep && prevSep.classList.contains('date-separator')) {
+                let hasSameDate = false;
+                let el = prevSep.nextElementSibling;
+                while (el && el !== nextSep) {
+                    const msgEl = el.classList.contains('message-wrapper') ? el.querySelector('.message') : el;
+                    if (msgEl && msgEl.dataset.sentAt) {
+                        if (this._getDateLabel(msgEl.dataset.sentAt) === prevSep.textContent) {
+                            hasSameDate = true;
+                            break;
+                        }
+                    }
+                    el = el.nextElementSibling;
+                }
+                if (!hasSameDate) prevSep.remove();
+            }
+            if (prevSep && nextSep && prevSep.classList.contains('date-separator') && nextSep.classList.contains('date-separator')) {
+                if (prevSep.textContent === nextSep.textContent) nextSep.remove();
+            }
+            this.loadChats();
+        }, {once: true});
     },
 
     onMessageDelivered(payload) {

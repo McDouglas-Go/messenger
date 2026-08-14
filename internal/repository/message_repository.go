@@ -37,9 +37,9 @@ func (r *pgMessageRepository) Create(ctx context.Context, msg *model.EncryptedMe
 	defer tx.Rollback(ctx)
 
 	query := `
-        INSERT INTO messages (chat_id, sender_id, encrypted_content, nonce, content_type, status)
-        VALUES ($1, $2, $3, $4, $5, 'sent')
-        RETURNING id, sent_at`
+		INSERT INTO messages (chat_id, sender_id, encrypted_content, nonce, content_type, status, reply_to_id)
+		VALUES ($1, $2, $3, $4, $5, 'sent', $6)
+		RETURNING id, sent_at`
 
 	err = tx.QueryRow(ctx, query,
 		msg.ChatID,
@@ -47,6 +47,7 @@ func (r *pgMessageRepository) Create(ctx context.Context, msg *model.EncryptedMe
 		msg.EncryptedContent,
 		msg.Nonce,
 		msg.ContentType,
+		msg.ReplyToID,
 	).Scan(&msg.ID, &msg.SentAt)
 	if err != nil {
 		return fmt.Errorf("insert message: %w", err)
@@ -62,7 +63,7 @@ func (r *pgMessageRepository) Create(ctx context.Context, msg *model.EncryptedMe
 
 func (r *pgMessageRepository) GetChatMessages(ctx context.Context, chatID string, limit, offset int) ([]*model.EncryptedMessage, error) {
 	query := `
-        SELECT id, chat_id, sender_id, encrypted_content, nonce, content_type, status, sent_at, edited_at
+        SELECT id, chat_id, sender_id, encrypted_content, nonce, content_type, status, sent_at, edited_at, reply_to_id
         FROM messages
         WHERE chat_id = $1
         ORDER BY sent_at DESC
@@ -87,6 +88,7 @@ func (r *pgMessageRepository) GetChatMessages(ctx context.Context, chatID string
 			&m.Status,
 			&m.SentAt,
 			&m.EditedAt,
+			&m.ReplyToID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
@@ -102,7 +104,7 @@ func (r *pgMessageRepository) GetChatMessages(ctx context.Context, chatID string
 
 func (r *pgMessageRepository) GetByID(ctx context.Context, id string) (*model.EncryptedMessage, error) {
 	query := `
-        SELECT id, chat_id, sender_id, encrypted_content, nonce, content_type, status, sent_at, edited_at
+        SELECT id, chat_id, sender_id, encrypted_content, nonce, content_type, status, sent_at, edited_at, reply_to_id
         FROM messages
         WHERE id = $1`
 
@@ -117,6 +119,7 @@ func (r *pgMessageRepository) GetByID(ctx context.Context, id string) (*model.En
 		&msg.Status,
 		&msg.SentAt,
 		&msg.EditedAt,
+		&msg.ReplyToID,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -130,7 +133,7 @@ func (r *pgMessageRepository) GetByID(ctx context.Context, id string) (*model.En
 
 func (r *pgMessageRepository) GetLastMessage(ctx context.Context, chatID string) (*model.EncryptedMessage, error) {
 	query := `
-        SELECT id, chat_id, sender_id, encrypted_content, nonce, content_type, status, sent_at, edited_at
+        SELECT id, chat_id, sender_id, encrypted_content, nonce, content_type, status, sent_at, edited_at, reply_to_id
         FROM messages
         WHERE chat_id = $1
         ORDER BY sent_at DESC
@@ -147,6 +150,7 @@ func (r *pgMessageRepository) GetLastMessage(ctx context.Context, chatID string)
 		&msg.Status,
 		&msg.SentAt,
 		&msg.EditedAt,
+		&msg.ReplyToID,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -159,7 +163,7 @@ func (r *pgMessageRepository) GetLastMessage(ctx context.Context, chatID string)
 
 func (r *pgMessageRepository) GetAllMessages(ctx context.Context, chatID string) ([]*model.EncryptedMessage, error) {
 	query := `
-        SELECT id, chat_id, sender_id, encrypted_content, nonce, content_type, status, sent_at, edited_at
+        SELECT id, chat_id, sender_id, encrypted_content, nonce, content_type, status, sent_at, edited_at, reply_to_id
         FROM messages
         WHERE chat_id = $1
         ORDER BY sent_at`
@@ -182,6 +186,7 @@ func (r *pgMessageRepository) GetAllMessages(ctx context.Context, chatID string)
 			&msg.Status,
 			&msg.SentAt,
 			&msg.EditedAt,
+			&msg.ReplyToID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)

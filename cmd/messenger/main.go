@@ -65,7 +65,7 @@ func main() {
 
 	authHandler := handlers.NewAuthHandler(authService, userRepo, chatRepo, cfg.BaseURL, cfg.RefreshTokenTTL, cookieSecure, hub, logger)
 	chatHandler := handlers.NewChatHandler(chatServise, groupKeyService, hub, logger)
-	messageHandler := handlers.Newmessagehandler(messageService, logger)
+	messageHandler := handlers.Newmessagehandler(messageService, userRepo, cfg.BaseURL, logger)
 	mediaHandler := handlers.NewMediahandler(mediaService, logger)
 	wsHandler := handlers.NewWSHandler(hub, jwtManager, logger)
 
