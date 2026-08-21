@@ -15,6 +15,7 @@ type ChatWithInfo struct {
 	OtherUser   *UserInfo               `json:"other_user,omitempty"`
 	LastMessage *model.EncryptedMessage `json:"last_message,omitempty"`
 	SenderName  string                  `json:"sender_name,omitempty"`
+	UnreadCount int                     `json:"unread_count"`
 }
 
 type UserInfo struct {
@@ -153,6 +154,12 @@ func (s *chatService) GetUserChats(ctx context.Context, userID string) ([]*ChatW
 				if cwi.SenderName == "" {
 					cwi.SenderName = sender.Username
 				}
+			}
+		}
+		for _, cwi := range result {
+			count, err := s.msgRepo.GetUnreadCountByChat(ctx, cwi.Chat.ID, userID)
+			if err == nil {
+				cwi.UnreadCount = count
 			}
 		}
 		if chat.Type == model.ChatTypePrivate {

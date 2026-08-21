@@ -62,7 +62,19 @@ const Api = {
             throw new Error(error || 'Request failed');
         }
 
-        return response.status === 204 ? null : response.json();
+        if (response.status === 204) return null;
+
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+            try {
+                return await response.json();
+            } catch (e) {
+                throw new Error('Invalid JSON response');
+            }
+        } else {
+            const text = await response.text();
+            return text === '' ? null : text;
+        }
     },
 
     async refreshToken() {

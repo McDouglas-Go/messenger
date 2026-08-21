@@ -260,6 +260,7 @@ func (h *ChatHandler) GetUserChats(w http.ResponseWriter, r *http.Request) {
 		OtherUser   *service.UserInfo       `json:"other_user,omitempty"`
 		LastMessage *model.EncryptedMessage `json:"last_message,omitempty"`
 		SenderName  string                  `json:"sender_name,omitempty"`
+		UnreadCount int                     `json:"unread_count"`
 	}
 
 	respList := make([]chatInfo, 0, len(chatsWithInfo))
@@ -274,6 +275,7 @@ func (h *ChatHandler) GetUserChats(w http.ResponseWriter, r *http.Request) {
 			OtherUser:   cwi.OtherUser,
 			LastMessage: cwi.LastMessage,
 			SenderName:  cwi.SenderName,
+			UnreadCount: cwi.UnreadCount,
 		}
 		respList = append(respList, ci)
 	}

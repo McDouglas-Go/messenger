@@ -11,7 +11,9 @@ const Chats = {
     currentOffset: 0,
     allMessagesLoaded: false,
     isLoadingMessage: false,
-    replyToMsg: null,
+    replyToMsg: null, 
+    _chatScrollHandler: null, 
+    _chatKeyTimeout: null, 
 
     async init() {
         await this.loadChats();
@@ -20,8 +22,14 @@ const Chats = {
 
     async loadChats() {
         try {
-            this.chats = await Api.getChats();
+            const data = await Api.getChats();
+            this.chats = data.map(chat => ({
+                ...chat,
+                unreadCount: chat.unread_count, 
+            }));
             await this.renderAllChats();
+            this.updateChatsButtonBadge();
+            this.initChatKeyLoading();
         } catch (err) {
             console.error('Failed to load chats:', err);
         }
@@ -66,6 +74,52 @@ const Chats = {
         if (titleDiv) titleDiv.textContent = title;
     },
 
+    async loadChatKey(chatId) {
+        if (this.chatKeys[chatId]) return;
+        const chat = this.chats.find(c => c.id === chatId);
+        if (!chat) return;
+
+        if (chat.type === 'private') {
+            await this.obtainPrivateChatKey(chatId);
+        } else {
+            await this.obtainGroupKey(chatId);
+        }
+    },
+
+    initChatKeyLoading() {
+        const list = document.getElementById('chat-list');
+        if (!list) return;
+        
+        if (this._chatScrollHandler) {
+            list.removeEventListener('scroll', this._chatScrollHandler);
+        }
+        const loadVisibleKeys = () => {
+            const listRect = list.getBoundingClientRect();
+            const visibleIds = [];
+            list.querySelectorAll('li[id^="chat-"]').forEach(li => {
+                const liRect = li.getBoundingClientRect();
+                if (liRect.bottom > listRect.top && liRect.top < listRect.bottom) {
+                    visibleIds.push(li.id.replace('chat-', ''));
+                }
+            });
+            visibleIds.forEach(chatId => {
+                if (!this.chatKeys[chatId]) {
+                    this.loadChatKey(chatId).then(() => {
+                        if (this.chatKeys[chatId]) this.renderLastMessage(chatId);
+                    }).catch(e => console.warn('Failed to load key for chat', chatId, e));
+                }
+            });
+        };
+
+        loadVisibleKeys();
+
+        this._chatScrollHandler = () => {
+            clearTimeout(this._chatKeyTimeout);
+            this._chatKeyTimeout = setTimeout(loadVisibleKeys, 200);
+        };
+        list.addEventListener('scroll', this._chatScrollHandler);
+    },
+ 
     async renderLastMessage(chatId) {
         const chat = this.chats.find(c => c.id === chatId);
         if (!chat) return;
@@ -77,8 +131,6 @@ const Chats = {
         if (oldStatus) oldStatus.remove();
 
         let lastMsgText = await this.formatLastMessage(chat);
-        lastMsgEl.innerHTML = escapeHtml(lastMsgText);
-
         let statusIndicator = '';
         if (chat.last_message && chat.last_message.sender_id === Api.userId) {
             const st = chat.last_message.status;
@@ -90,7 +142,17 @@ const Chats = {
                 statusIndicator = '<span class="message-status sent">✓</span>';
             }
         }
-        lastMsgEl.insertAdjacentHTML('beforeend', statusIndicator);
+        lastMsgEl.innerHTML = `${escapeHtml(lastMsgText)} ${statusIndicator}`;
+
+        const badgeEl = li.querySelector('.unread-badge');
+        if (badgeEl) {
+            if (chat.unreadCount && chat.unreadCount > 0) {
+                badgeEl.textContent = chat.unreadCount > 99 ? '99+' : chat.unreadCount;
+                badgeEl.style.display = 'inline-flex';
+            } else {
+                badgeEl.style.display = 'none';
+            }
+        }
     },
 
     async renderChatItem(chatId) {
@@ -117,6 +179,7 @@ const Chats = {
                 </div>
                 <div class="chat-meta">
                     <div class="chat-time"></div>
+                    <span class="unread-badge" style="display:none;"></span>
                 </div>
             `;
             list.appendChild(li);
@@ -133,10 +196,10 @@ const Chats = {
                 const packed = CryptoModule.unpackEncryptedData(chat.last_message);
                 plain = await CryptoModule.decrypt(key, packed);
             } catch (e) {
-                plain = ' ';
+                plain = '...';
             }
         } else {
-            plain = ' ';
+            plain = '...';
         }
         if (chat.last_message.content_type !== 'text' && plain.startsWith('{') && plain.includes('media_ids')) {
             try {
@@ -173,7 +236,8 @@ const Chats = {
         this.mediaProcessed.clear();
         if (this.currentChatId === chatId) return;
         this.currentChatId = chatId;
-        this.currentChatSharedKey = null;
+        this.currentChatSharedKey = this.chatKeys[chatId] || null;
+        this.currentChatDetail = null;
         this.currentOffset = 0;
         this.allMessagesLoaded = false;
         this.isLoadingMessage = false;
@@ -351,31 +415,27 @@ const Chats = {
         };
     },
 
+    updateChatsButtonBadge() {
+        const btn = document.getElementById('chats-btn');
+        if (!btn) return;
+        const chatsWithUnread = this.chats.filter(chat => chat.unreadCount > 0).length;
+        const existingBadge = btn.querySelector('.badge');
+        if (existingBadge) existingBadge.remove();
+        if (chatsWithUnread > 0) {
+            const badge = document.createElement('span');
+            badge.className = 'badge';
+            badge.textContent = chatsWithUnread > 99 ? '99+' : chatsWithUnread;
+            btn.appendChild(badge);
+        }
+    },
+
     async loadChatDetail(chatId) {
         try {
             const detail = await Api.get(`/chats/${chatId}`);
             this.currentChatDetail = detail;
             this.renderChatHeader();
             if (detail.chat.type === 'private') {
-                const other = detail.members.find(m => m.user_id !== Api.userId);
-                if (other) {
-                    try {
-                        const pubResp = await Api.get(`/users/${other.user_id}/public-key`);
-                        if (pubResp && pubResp.public_key) {
-                            const partherJwk = JSON.parse(pubResp.public_key);
-                            const partnerPublicKey = await CryptoModule.importPublicKey(partherJwk);
-                            const myKeys = await KeyStorage.loadKeys(Api.userId);
-                            if (myKeys) {
-                                this.currentChatSharedKey = await CryptoModule.deriveSharedKey(myKeys.privateKey, partnerPublicKey);
-                                this.chatKeys[chatId] = this.currentChatSharedKey;
-                            } else {
-                                console.warn('No private key found in storage, cannot encrypt');
-                            }
-                        }
-                    } catch (e) {
-                        console.error('Failed to set up encryption for chat', e);
-                    }
-                }
+                await this.obtainPrivateChatKey(chatId);
             } else {
                 await this.obtainGroupKey(chatId);
             }
@@ -915,10 +975,8 @@ const Chats = {
 
         try {
             const messages = await Api.getMessages(chatId, 50, this.currentOffset, embed);
-            if (!append) {
-                messages.reverse(); 
-                this.currentOffset = 0;
-            }
+            messages.reverse(); 
+            if (!append) this.currentOffset = 0;
             this.currentOffset += messages.length;
             if (messages.length < 50) this.allMessagesLoaded = true;
             const decryptedMessages = [];
@@ -946,13 +1004,19 @@ const Chats = {
     async loadMoreMessages(list) {
         if (this.allMessagesLoaded || this.isLoadingMessage) return;
         this.isLoadingMessage = true;
+
+        const oldScrollTop = list.scrollTop;
         const oldScrollHeight = list.scrollHeight;
+
         await this.loadMessages(this.currentChatId, true);
-        const newScrollHeight = list.scrollHeight;
-        list.scrollTop = newScrollHeight - oldScrollHeight;
-        this.scrollToBottom(list);
-        this.isLoadingMessage = false;
-        this.updateFloatingDate();
+
+        requestAnimationFrame(() => {
+            const newScrollHeight = list.scrollHeight;
+            list.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
+            this.isLoadingMessage = false;
+            this.updateFloatingDate();
+            this.scrollToBottom(list);
+        });
     },
 
     renderMessages(messages, append = false) {
@@ -962,11 +1026,8 @@ const Chats = {
             main.innerHTML = `
                 <div id="chat-header"></div>
                 <div id="messages-container">
-                    <div id="messages-list">
-                        <div id="floating-date-wrapper">
-                            <div id="floating-date" class="floating-date"></div>
-                        </div>
-                    </div>
+                    <div id="messages-list"></div>
+                    <div id="floating-date" class="floating-date"></div>
                     <button id="scroll-to-bottom-btn" class="scroll-to-bottom-btn">︾ ︾ ︾</button>
                     <div id="typing-indicator" class="typing-indicator" style="display:none;"></div>
                     <form id="message-form">
@@ -1083,12 +1144,8 @@ const Chats = {
             if (msgElement) elementsToInsert.push(msgElement);
         });
 
-        const floatingWrapper = document.getElementById('floating-date-wrapper');
         if (append) {
-            const insertBeforeEl = floatingWrapper ? floatingWrapper.nextElementSibling : list.firstChild;
-            for (let i = elementsToInsert.length - 1; i >= 0; i--) {
-                list.insertBefore(elementsToInsert[i], insertBeforeEl);
-            }
+            list.prepend(...elementsToInsert);
         } else  {
             elementsToInsert.forEach(el => list.appendChild(el));
             list.scrollTop = list.scrollHeight;
@@ -1119,10 +1176,12 @@ const Chats = {
                 i--;
             }
         }
-        const firstMessage = list.querySelector('.message, .message-wrapper');
-        const firstSeparator = list.querySelector('.date-separator');
-        if (firstSeparator && firstMessage && firstSeparator.compareDocumentPosition(firstMessage) & Node.DOCUMENT_POSITION_FOLLOWING) {
-            firstSeparator.remove();
+        const firstContentEl = list.firstElementChild;
+        if (firstContentEl && firstContentEl.classList.contains('date-separator')) {
+            const nextEl = firstContentEl.nextElementSibling;
+            if (nextEl && (nextEl.classList.contains('message') || nextEl.classList.contains('message-wrapper'))) {
+                firstContentEl.remove();
+            }
         }
     },
 
@@ -1162,6 +1221,9 @@ const Chats = {
         }
         indicator.textContent = topMessageDate;
         indicator.style.display = topMessageDate ? 'block' : 'none';
+
+        const scrollbarWidth = list.offsetWidth - list.clientWidth;
+        indicator.style.left = scrollbarWidth > 0 ? `calc(50% - ${scrollbarWidth / 2}px)` : '50%';
 
         const separators = document.querySelectorAll('.date-separator');
         const indicatorRect = indicator.getBoundingClientRect();
@@ -1287,6 +1349,7 @@ const Chats = {
                         mediaHtml = this._renderMediaPreview(mediaData);
                         displayText = mediaData.text;
                     }
+                    div.classList.add('has-media');
                 } catch (e) {
                     console.error('Failed to parse media metadata', e);
                     displayText = '';
@@ -1344,15 +1407,7 @@ const Chats = {
             const replyBlock = div.querySelector('.reply-block');
             if (replyBlock) {
                 replyBlock.addEventListener('click', () => {
-                    const original = document.querySelector(`.message[data-message-id="${msg.reply_to_id}"]`);
-                    if (original) {
-                        original.scrollIntoView({behavior: 'smooth', block: 'center'});
-                        original.style.transition = 'background 0.3s';
-                        original.style.background = '#e6f2ff';
-                        setTimeout(() => {
-                            original.style.background = '';
-                        }, 2000);
-                    }
+                    this.scrollToReplyOriginal(msg.reply_to_id);
                 });
             }
         }
@@ -1367,6 +1422,30 @@ const Chats = {
             div.dataset.sentAt = msg.sent_at;
             container.appendChild(div);
             return div;
+        }
+    },
+
+    async scrollToReplyOriginal(replyId) {
+        const list = document.getElementById('messages-list');
+        if (!list) return;
+
+        const scrollToOriginal = () => {
+            const original = document.querySelector(`.message[data-message-id="${replyId}"]`);
+            if (original) {
+                original.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                original.style.transition = 'background 0.3s';
+                original.style.background = '#e6f2ff';
+                setTimeout(() => { original.style.background = ''; }, 2000);
+                return true;
+            }
+            return false;
+        };
+        if (scrollToOriginal()) return;
+
+        while (!this.allMessagesLoaded) {
+            await this.loadMoreMessages(list);
+            await new Promise(resolve => setTimeout(resolve, 300));
+            if (scrollToOriginal()) return;
         }
     },
 
@@ -1735,6 +1814,7 @@ const Chats = {
             this.updateSendBtn();
         } catch (err) {
             alert('Failed to send message: ' + err.message);
+            this.cancelReply();
         }
     },
 
@@ -1749,8 +1829,14 @@ const Chats = {
                         const statusEl = msgDiv.querySelector('.message-status');
                         if (senderId !== Api.userId && statusEl && !statusEl.classList.contains('read')) {
                             statusEl.classList.add('read');
-                            Api.post(`/chats/${this.currentChatId}/messages/${messageId}/read`)
-                            .catch(e => console.error('Failed to mark read', e));
+                            Api.post(`/chats/${this.currentChatId}/messages/${messageId}/read`).then(() => {
+                                const chat = this.chats.find(c => c.id === this.currentChatId);
+                                if (chat && chat.unreadCount > 0) {
+                                    chat.unreadCount--;
+                                    this.renderLastMessage(chat.id);
+                                    this.updateChatsButtonBadge();
+                                }
+                            }).catch(e => console.error('Failed to mark read', e));
                             this._messageObserver.unobserve(msgDiv);
                         }
                     }
@@ -1958,8 +2044,60 @@ const Chats = {
         }
     },
 
+    async obtainPrivateChatKey(chatId) {
+        if (this.chatKeys[chatId]) this.currentChatSharedKey = this.chatKeys[chatId];
+
+        let otherUserId = null;
+        if (this.currentChatDetail && this.currentChatDetail.chat.id === chatId) {
+            const other = this.currentChatDetail.members.find(m => m.user_id !== Api.userId);
+            if (other) otherUserId = other.user_id;
+        }
+        if (!otherUserId) {
+            const chat = this.chats.find(c => c.id === chatId);
+            if (chat) otherUserId = chat.other_user.id;
+        }
+        if (!otherUserId) {
+            try {
+                const detail = await Api.get(`/chats/${chatId}`);
+                const other = detail.members.find(m => m.user_id !== Api.userId);
+                if (other) otherUserId = other.user_id;
+            } catch (e) {
+                console.error('Failed to load private chat details', e);
+                return;
+            }
+        }
+        if (!otherUserId) return;
+
+        try {
+            const pubResp = await Api.get(`/users/${otherUserId}/public-key`);
+            if (!pubResp?.public_key) return;
+
+            const partherPublicKey = await CryptoModule.importPublicKey(JSON.parse(pubResp.public_key));
+            const myKeys = await KeyStorage.loadKeys(Api.userId);
+            if (!myKeys) return;
+
+            const sharedKey = await CryptoModule.deriveSharedKey(myKeys.privateKey, partherPublicKey);
+            this.chatKeys[chatId] = sharedKey;
+            this.currentChatSharedKey = sharedKey;
+            return;
+        } catch (e) {
+            console.error('Failed to set up encryption for private chat', e);
+            return;
+        }
+    },
+
     async obtainGroupKey(chatId) {
-        const members = this.currentChatDetail.members;
+        if (this.chatKeys[chatId]) {
+            this.currentChatSharedKey = this.chatKeys[chatId];
+            return;
+        }
+        let members;
+        if (this.currentChatDetail?.members) {
+            members = this.currentChatDetail.members;
+        } else {
+            const detail = await Api.get(`/chats/${chatId}`);
+            members = detail.members;
+        } 
         const owner = members.find(m => m.role === 'owner');
         if (!owner) {
             console.error('No owner in group');
@@ -1993,25 +2131,25 @@ const Chats = {
                     sharedKeyWithOwner,
                     ciphertext
                 );
-                this.currentChatSharedKey = await crypto.subtle.importKey(
+                const key = await crypto.subtle.importKey(
                     'raw',
                     rawKey,
                     { name: 'AES-GCM', length: 256 },
                     true,
                     ['encrypt', 'decrypt']
                 );
-                this.chatKeys[chatId] = this.currentChatSharedKey;
+                this.chatKeys[chatId] = key;
+                this.currentChatSharedKey = key;
                 return;
             }
         } catch (e) {
+            console.warn('No existing group key for', chatId, e);
             if (owner.user_id === Api.userId) {
                 await this.generateGroupKey(chatId);
-                const memberIds = members.map(m => m.user_id);
-                await this.distributeGroupKey(chatId, memberIds);
-            } else {
-                console.warn('Group key not available and user is not owner');
-                this.currentChatSharedKey = null;
+                const allMemberIds = members.map(m => m.user_id);
+                await this.distributeGroupKey(chatId, allMemberIds);
             }
+            return;
         }
     },
     
@@ -2159,24 +2297,45 @@ const Chats = {
             const packed = CryptoModule.unpackEncryptedData(msg);
             CryptoModule.decrypt(key, packed).then(plain => {
                 msg.text = plain;
-                const appendEl = this.appendMessage(msg);
                 const list = document.getElementById('messages-list');
-                if (appendEl) {
-                    const currentDate = this._getDateLabel(msg.sent_at);
-                    const allMessageEls = list ? Array.from(list.querySelectorAll('.message[data-sent-at]')) : [];
-                    const hasSameDate = allMessageEls.some(el => this._getDateLabel(el.dataset.sentAt) === currentDate);
-                    if (!hasSameDate) {
-                        const sep = document.createElement('div');
-                        sep.className = 'date-separator';
-                        sep.textContent = currentDate;
-                        appendEl.parentNode.insertBefore(sep, appendEl);
+                if (!list) return;
+                const currentDate = this._getDateLabel(msg.sent_at);
+                let hassameDate = false;
+                const existingEls = list.querySelectorAll('.date-separator, .message[data-sent-at]');
+                for (const el of existingEls) {
+                    if (el.classList.contains('date-separator')) {
+                        if (el.textContent === currentDate) {
+                            hassameDate = true;
+                            break;
+                        }
+                    } else if (el.dataset.sentAt) {
+                        if (this._getDateLabel(el.dataset.sentAt) === currentDate) {
+                            hassameDate = true;
+                            break;
+                        }
                     }
                 }
-                if (list) this.cleanupDateSeparators(list);
+                const appendEl = this.appendMessage(msg);
+                if (!appendEl) return;
+
+                if (!hassameDate) {
+                    const sep = document.createElement('div');
+                    sep.className = 'date-separator';
+                    sep.textContent = currentDate;
+                    appendEl.parentNode.insertBefore(sep, appendEl);
+                }
                 if (msg.sender_id === Api.userId || (list.scrollTop + list.clientHeight >= list.scrollHeight - 150)) {
-                    if (list) list.scrollTop = list.scrollHeight;
+                    list.scrollTop = list.scrollHeight;
                 }
                 this.scrollToBottom(list);
+                if (msg.sender_id !== Api.userId) {
+                    const chat = this.chats.find(c => c.id === msg.chat_id);
+                    if (chat) {
+                        chat.unreadCount = (chat.unreadCount || 0) + 1;
+                        this.renderLastMessage(chat.id);
+                        this.updateChatsButtonBadge();
+                    }
+                }
                 if (['image', 'video', 'file'].includes(msg.content_type) && !this.mediaProcessed.has(msg.id)) {
                     this.mediaProcessed.add(msg.id);
                     const msgEl = document.querySelector(`.message[data-message-id="${msg.id}"]`);
@@ -2188,6 +2347,13 @@ const Chats = {
     },
 
     onMessageUpdated(payload) {
+        const chat = this.chats.find(c => c.id === payload.chat_id);
+        if (chat && chat.last_message && chat.last_message.id === payload.id) {
+            chat.last_message.encrypted_content = payload.encrypted_content;
+            chat.last_message.nonce = payload.nonce;
+            chat.last_message.edited_at = payload.edited_at;
+            if (payload.status) chat.last_message.status = payload.status;
+        }
         this.renderLastMessage(payload.chat_id);
         if (this.currentChatId !== payload.chat_id) return;
 
@@ -2233,37 +2399,41 @@ const Chats = {
     },
 
     onMessageDeleted(payload) {
-        if (this.currentChatId !== payload.chat_id) return;
-
-        const msgDiv = document.querySelector(`.message[data-message-id="${payload.message_id}"]`);
-        if (!msgDiv) return;
-
-        const wrapper = msgDiv.closest('.message-wrapper') || msgDiv;
-        wrapper.classList.add('deleting');
-        wrapper.addEventListener('animationend', () => {
-            const prevSep = wrapper.previousElementSibling;
-            const nextSep = wrapper.nextElementSibling;
-            if (wrapper.parentNode) wrapper.parentNode.removeChild(wrapper);
-            if (prevSep && prevSep.classList.contains('date-separator')) {
-                let hasSameDate = false;
-                let el = prevSep.nextElementSibling;
-                while (el && el !== nextSep) {
-                    const msgEl = el.classList.contains('message-wrapper') ? el.querySelector('.message') : el;
-                    if (msgEl && msgEl.dataset.sentAt) {
-                        if (this._getDateLabel(msgEl.dataset.sentAt) === prevSep.textContent) {
-                            hasSameDate = true;
-                            break;
+        if (this.currentChatId === payload.chat_id){
+            const contextMenu = document.getElementById('context-menu');
+            if (contextMenu) contextMenu.remove();
+            
+            if (this.replyToMsg && this.replyToMsg.id === payload.message_id) this.cancelReply();
+            const msgDiv = document.querySelector(`.message[data-message-id="${payload.message_id}"]`);
+            if (msgDiv) {
+                const wrapper = msgDiv.closest('.message-wrapper') || msgDiv;
+                wrapper.classList.add('deleting');
+                wrapper.addEventListener('animationend', () => {
+                    const prevSep = wrapper.previousElementSibling;
+                    const nextSep = wrapper.nextElementSibling;
+                    wrapper.remove();
+                    if (prevSep && prevSep.classList.contains('date-separator')) {
+                        let hasSameDate = false;
+                        let el = prevSep.nextElementSibling;
+                        while (el && el !== nextSep) {
+                            const msgEl = el.classList.contains('message-wrapper') ? el.querySelector('.message') : el;
+                            if (msgEl && msgEl.dataset.sentAt) {
+                                if (this._getDateLabel(msgEl.dataset.sentAt) === prevSep.textContent) {
+                                    hasSameDate = true;
+                                    break;
+                                }
+                            }
+                            el = el.nextElementSibling;
                         }
+                        if (!hasSameDate) prevSep.remove();
                     }
-                    el = el.nextElementSibling;
-                }
-                if (!hasSameDate) prevSep.remove();
+                    if (prevSep && nextSep && prevSep.classList.contains('date-separator') && nextSep.classList.contains('date-separator')) {
+                        if (prevSep.textContent === nextSep.textContent) nextSep.remove();
+                    }
+                }, {once: true});
             }
-            if (prevSep && nextSep && prevSep.classList.contains('date-separator') && nextSep.classList.contains('date-separator')) {
-                if (prevSep.textContent === nextSep.textContent) nextSep.remove();
-            }
-            this.loadChats();
-        }, {once: true});
+        }
+        this.loadChats();
     },
 
     onMessageDelivered(payload) {

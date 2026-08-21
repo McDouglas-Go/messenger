@@ -92,19 +92,21 @@ func (h *MessageHandler) Send(w http.ResponseWriter, r *http.Request) {
 
 	if req.ReplyToID != nil {
 		original, err := h.messageService.GetByID(r.Context(), *req.ReplyToID, claims.UserID, chatID)
-		if err == nil && original != nil {
-			previewData := map[string]string{
-				"encrypted_content": base64.StdEncoding.EncodeToString(original.EncryptedContent),
-				"nonce":             base64.StdEncoding.EncodeToString(original.Nonce),
-			}
-			previewBytes, _ := json.Marshal(previewData)
-			previewStr := string(previewBytes)
-			replyPreview = &previewStr
-			originalSender, err := h.userRepo.GetByID(r.Context(), original.SenderID)
-			if err == nil && originalSender != nil {
-				name := originalSender.DisplayName
-				replySenderName = &name
-			}
+		if err != nil || original == nil || original.ChatID != chatID {
+			http.Error(w, "Reply message not found", http.StatusBadRequest)
+			return
+		}
+		previewData := map[string]string{
+			"encrypted_content": base64.StdEncoding.EncodeToString(original.EncryptedContent),
+			"nonce":             base64.StdEncoding.EncodeToString(original.Nonce),
+		}
+		previewBytes, _ := json.Marshal(previewData)
+		previewStr := string(previewBytes)
+		replyPreview = &previewStr
+		originalSender, err := h.userRepo.GetByID(r.Context(), original.SenderID)
+		if err == nil && originalSender != nil {
+			name := originalSender.DisplayName
+			replySenderName = &name
 		}
 	}
 

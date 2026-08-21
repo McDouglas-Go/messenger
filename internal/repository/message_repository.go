@@ -15,6 +15,7 @@ type MessageRepository interface {
 	GetChatMessages(ctx context.Context, chatID string, limit, offset int) ([]*model.EncryptedMessage, error)
 	GetLastMessage(ctx context.Context, chatID string) (*model.EncryptedMessage, error)
 	GetAllMessages(ctx context.Context, chatID string) ([]*model.EncryptedMessage, error)
+	GetUnreadCountByChat(ctx context.Context, chatID, userID string) (int, error)
 	GetByID(ctx context.Context, id string) (*model.EncryptedMessage, error)
 	Update(ctx context.Context, msg *model.EncryptedMessage) error
 	UpdateStatus(ctx context.Context, messageID string, status model.MessageStatus) error
@@ -194,6 +195,17 @@ func (r *pgMessageRepository) GetAllMessages(ctx context.Context, chatID string)
 		messages = append(messages, msg)
 	}
 	return messages, nil
+}
+
+func (r *pgMessageRepository) GetUnreadCountByChat(ctx context.Context, chatID, userID string) (int, error) {
+	var count int
+	query := `SELECT COUNT(*) FROM messages WHERE chat_id = $1 AND sender_id != $2 AND status != 'read'`
+	err := r.pool.QueryRow(ctx, query, chatID, userID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count unread messages: %w", err)
+	}
+
+	return count, nil
 }
 
 func (r *pgMessageRepository) Update(ctx context.Context, msg *model.EncryptedMessage) error {
