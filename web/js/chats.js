@@ -296,7 +296,7 @@ const Chats = {
         main.innerHTML = `
             <div class="chat-header-empty">
                 <div class="chat-header-left">
-                    <button id="back-from-group-create" class="icon-btn" title="Back">←</button>
+                    <button id="back-from-group-create" class="icon-btn back-btn" title="Back">←</button>
                     <span class="chat-header-title">New Group</span>
                 </div>
             </div>
@@ -468,7 +468,7 @@ const Chats = {
         }
         header.innerHTML = `
             <div class="chat-header-left">
-                <button id="back-to-chats-btn" class="icon-btn" title="Back">←</button>
+                <button id="back-to-chats-btn" class="icon-btn back-btn" title="Back">←</button>
                 ${avatarHtml}
                 <div class="chat-header-info">
                     <div class="chat-header-title">${escapeHtml(title)}</div>
@@ -900,7 +900,7 @@ const Chats = {
 
         const contentHtml = `
             <div class="back-btn-container">
-                <button id="back-to-chat-info-btn" class="icon-btn" title="Back">←</button>
+                <button id="back-to-chat-info-btn" class="icon-btn back-btn" title="Back">←</button>
             </div>
             <div class="profile-info">
                 <div class="panel-avatar" id="user-profile-avatar"></div>
@@ -1033,7 +1033,7 @@ const Chats = {
                     <form id="message-form">
                         <button type="button" id="attach-btn" title="Attach file">📎</button>
                         <input type="file" id="file-input" accept="image/*,video/*,.pdf,.doc,.docx" style="display:none" multiple>
-                        <input type="text" id="message-input" placeholder="Message…" autocomplete="off" disabled>
+                        <textarea id="message-input" placeholder="Message…" autocomplete="off" disabled rows="1"></textarea>
                         <div class="send-btn-container" id="send-btn-container">
                             <button type="submit" id="send-message-btn" disabled>
                                 <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
@@ -1081,7 +1081,13 @@ const Chats = {
 
             let typingTimer;
             if (msgInput) {
+                const adjustHeight = () => {
+                    const maxInputHeight = Math.min(window.innerHeight * 0.5, 250);
+                    msgInput.style.height = 'auto';
+                    msgInput.style.height = Math.min(msgInput.scrollHeight, maxInputHeight) + 'px';
+                }
                 msgInput.addEventListener('input', () => {
+                    adjustHeight();
                     this.updateSendBtn();
                     if (!Chats.ws || Chats.ws.readyState !== WebSocket.OPEN) return;
                     Chats.ws.send(JSON.stringify({
@@ -1099,13 +1105,18 @@ const Chats = {
                     }, 2000);
                 });
 
-                msgInput.addEventListener('keydown', () => {
+                msgInput.addEventListener('keydown', (e) => {
                     clearTimeout(typingTimer);
                     if (Chats.ws && Chats.ws.readyState === WebSocket.OPEN) {
                         Chats.ws.send(JSON.stringify({
                             event: 'stop_typing',
                             data: { chat_id: Chats.currentChatId }
                         }));
+                    }
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        const form = document.getElementById('message-form');
+                        if (form) form.requestSubmit();
                     }
                 });
             }
@@ -1359,6 +1370,8 @@ const Chats = {
             }
         } else displayText = msg.text;
 
+        if (mediaHtml) div.classList.add('has-media');
+
         const timeStr = new Date(msg.sent_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         let editedStr = '';
         if (msg.edited_at) {
@@ -1540,51 +1553,113 @@ const Chats = {
                     return;
                 }
             }
-            const urls = await Promise.all(mediaIds.map((id, idx) => {
+            const visualMedia = [];
+            const fileMedia = [];
+            mediaIds.forEach((id, idx) => {
                 const mimeType = mediaTypes[idx] || 'application/octet-stream';
-                return this.downloadAndDecryptFile(id, mimeType, key);
-            }));
+                if (mimeType.startsWith('image/') || mimeType.startsWith('video/')) {
+                    visualMedia.push({id, mimeType, fileName: mediaNames[idx] || 'Noname file' });
+                } else {
+                    fileMedia.push({id, mimeType, fileName: mediaNames[idx] || 'Noname file' });
+                }
+            });
             const mediaContainer = msgElement.querySelector('.media-container');
             if (mediaContainer) {
                 mediaContainer.innerHTML = '';
-                urls.forEach((url, idx) => {
-                    const mimeType = mediaTypes[idx] || 'application/octet-stream';
-                    const fileName = mediaNames[idx] || 'Noname file';
-                    if (mimeType.startsWith('image/')) {
-                        const img = document.createElement('img');
-                        img.src = url;
-                        img.className = 'media-preview-img';
-                        img.addEventListener('click', () => Api.openMediaViewer(url, mimeType, fileName, mediaText));
-                        mediaContainer.appendChild(img);
-                    } else if (mimeType.startsWith('video/')) {
-                        const wrapper = document.createElement('div');
-                        wrapper.className = 'video-preview-wrapper';
-                        const video = document.createElement('video');
-                        video.src = url;
-                        video.className = 'media-preview-video';
-                        video.addEventListener('click', (e) => {
-                            e.stopPropagation();
-                            Api.openMediaViewer(url, mimeType, fileName, mediaText);
-                        })
-                        wrapper.appendChild(video);
-                        const playIcon = document.createElement('div');
-                        playIcon.textContent = '▶';
-                        playIcon.className = 'play-icon';
-                        wrapper.appendChild(playIcon);
-                        mediaContainer.appendChild(wrapper);
-                    } else {
-                        const fileName = mediaNames[idx] || 'Noname file';
+                if (visualMedia.length > 0) {
+                    const visualContainer = document.createElement('div');
+                    visualContainer.className = 'media-grid';
+                    if (visualMedia.length === 1) {
+                        visualContainer.classList.add('single-media');
+                    }
+                    mediaContainer.appendChild(visualContainer);
+
+                    const cells = [];
+                    if (mediaIds.length > 1) {
+                        for (let i = 0; i < visualMedia.length; i++) {
+                            const cell = document.createElement('div');
+                            cell.className = 'grid-cell';
+                            cells.push(cell);
+                            visualContainer.appendChild(cell);
+                        }
+                    }
+                    for (let idx = 0; idx < visualMedia.length; idx++) {
+                        const {id, mimeType, fileName} = visualMedia[idx];
+                        const parent = cells.length > 0 ? cells[idx] : mediaContainer;
+                        const url = await this.downloadAndDecryptFile(id, mimeType, key);
+                        if (mimeType.startsWith('image/')) {
+                            const img = document.createElement('img');
+                            img.src = url;
+                            img.className = 'media-preview-img';
+                            img.addEventListener('click', () => Api.openMediaViewer(url, mimeType, fileName, mediaText));
+                            parent.appendChild(img);
+                        } else if (mimeType.startsWith('video/')) {
+                            const wrapper = document.createElement('div');
+                            wrapper.className = 'video-preview-wrapper';
+                            const video = document.createElement('video');
+                            video.src = url;
+                            video.className = 'media-preview-video';
+                            video.muted = false;
+                            video.playsInline = true;
+                            video.addEventListener('loadedmetadata', () => {
+                                const duration = video.duration;
+                                if (isFinite(duration)) {
+                                    const minutes = Math.floor(duration / 60);
+                                    const seconds = Math.floor(duration % 60);
+                                    const durText = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+                                    durationEl.textContent = durText;
+                                }
+                            })
+                            video.addEventListener('click', (e) => {
+                                e.stopPropagation();
+                                Api.openMediaViewer(url, mimeType, fileName, mediaText);
+                            })
+                            wrapper.appendChild(video);
+                            const playIcon = document.createElement('div');
+                            playIcon.textContent = '▶';
+                            playIcon.className = 'play-icon';
+                            wrapper.appendChild(playIcon);
+                            const durationEl = document.createElement('div');
+                            durationEl.className = 'video-duration';
+                            wrapper.appendChild(durationEl);
+
+                            parent.appendChild(wrapper);
+                        }
+                    }
+                }
+                if (fileMedia.length > 0) {
+                    const fileList = document.createElement('div');
+                    fileList.className = 'file-list';
+                    mediaContainer.appendChild(fileList);
+
+                    for (let idx = 0; idx < fileMedia.length; idx++) {
+                        const {id, mimeType, fileName} = fileMedia[idx];
+                        const url = await this.downloadAndDecryptFile(id, mimeType, key);
+                        let ext = '';
+                        const dotIndex = fileName.lastIndexOf('.');
+                        if (dotIndex !== -1) {
+                            ext = fileName.substring(dotIndex + 1).toUpperCase();
+                        } else {
+                            const parts = mimeType.split('/');
+                            ext = parts[1] ? parts[1].toUpperCase() : 'FILE';
+                        }
+
                         const link = document.createElement('a');
                         link.href = url;
-                        link.textContent = `📄 ${fileName}`;
-                        link.className = 'download-link';
+                        link.className = 'file-preview';
                         link.setAttribute('download', fileName);
-                        const fileDiv = document.createElement('div');
-                        fileDiv.className = 'file-preview';
-                        fileDiv.appendChild(link);
-                        mediaContainer.appendChild(fileDiv);
+                        link.innerHTML = `
+                            <div class="file-icon">
+                                <span class="file-ext">${escapeHtml(ext)}</span>
+                                <svg class="download-icon" viewBox="0 0 24 24" width="16" height="16">
+                                    <path fill="white" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+                                </svg>
+                            </div>
+                            <span class="file-name">${escapeHtml(fileName)}</span>
+                        `;
+                        fileList.appendChild(link);
                     }
-                });
+                }
                 const list = document.getElementById('messages-list');
                 if (list) list.scrollTop = list.scrollHeight;
             }
@@ -1607,11 +1682,22 @@ const Chats = {
     },
 
     _renderMediaPreview(mediaData) {
-        const ids = mediaData.media_ids || [];
-        if (ids.length === 0) return '';
+        const mediaIds = mediaData.media_ids || [];
+        const mediaTypes = mediaData.media_types || [];
+        const mediaNames = mediaData.media_names || [];
+        let cellsHtml = '';
+        for (let i = 0; i < mediaIds.length; i++) {
+            const mime = mediaTypes[i] || 'application/octet-stream';
+            const isImage = mime.startsWith('image/');
+            const isVideo = mime.startsWith('video/');
+            const className = isImage ? 'grid-cell image-cell' : isVideo ? 'grid-cell video-cell' : 'grid-cell file-cell';
+            cellsHtml += `<div class="${className}" data-media-id="${mediaIds[i]}"></div>`;
+        }
         return `
-            <div class="media-container" data-media-ids="${ids.join(',')}">
-                <div class="media-placeholder">Decrypting media...</div>
+            <div class="media-container" data-media-ids="${mediaIds.join(',')}">
+                <div class="media-grid">
+                    ${cellsHtml}
+                </div>
             </div>
         `;
     },
@@ -1653,12 +1739,10 @@ const Chats = {
 
         const items = [];
 
-        if (msg.sender_id !== Api.userId) {
-            items.push({
-                text: 'Reply',
-                action: () => this.showReplyTo(msg)
-            });
-        }
+        items.push({
+            text: 'Reply',
+            action: () => this.showReplyTo(msg)
+        });
 
         let textToCopy = msg.text;
         if (['image', 'video', 'file'].includes(msg.content_type) && textToCopy.startsWith('{')) {
@@ -1808,6 +1892,7 @@ const Chats = {
             }
             this.cancelReply();
             input.value = '';
+            input.style.height = 'auto';
             const previewContainer = document.getElementById('media-preview');
             if (previewContainer) previewContainer.innerHTML = '';
             if (fileInput) fileInput.value = '';

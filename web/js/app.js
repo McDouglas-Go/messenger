@@ -75,6 +75,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        e.preventDefault();
+        const backBtn = document.querySelector('.back-btn:not([disabled])');
+        if (backBtn) backBtn.click();
+    }
+});
+
 (async function () {
     const currentHash = window.location.hash.substring(1);
     if (!Api.authToken) {

@@ -274,6 +274,9 @@ const Api = {
             video.src = url;
             video.controls = true;
             video.className = 'lightbox-video';
+            video.autoplay = true;
+            video.muted = false;
+            video.playsInline = true;
             mediaEl = video;
             wrapper.appendChild(video);
         }
