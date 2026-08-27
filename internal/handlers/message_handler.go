@@ -351,3 +351,28 @@ func (h *MessageHandler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (h *MessageHandler) DeleteBulkMessages(w http.ResponseWriter, r *http.Request) {
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
+	chatID := mux.Vars(r)["chat_id"]
+	var req struct {
+		MessageIDs []string `json:"message_ids"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(req.MessageIDs) == 0 {
+		http.Error(w, "No message IDs provided", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.messageService.DeleteMessages(r.Context(), claims.UserID, chatID, req.MessageIDs); err != nil {
+		h.log.Error("Bulk delete messages failed", "error", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}

@@ -14,6 +14,9 @@ const Chats = {
     replyToMsg: null, 
     _chatScrollHandler: null, 
     _chatKeyTimeout: null, 
+    selectedMessages: new Set(),
+    selectionModeActive: false,
+    _ignoreNextClick: false,
 
     async init() {
         await this.loadChats();
@@ -595,7 +598,7 @@ const Chats = {
                 </li>
             `).join('')
             contentHtml = `
-                <button class="edit-panel-btn icon-btn" title="Edit">✎</button>
+                ${current_role === 'owner' || current_role === 'admin' ? `<button class="edit-panel-btn icon-btn" title="Edit">✎</button>` : '' }
                 <div class="group-info">
                     <div class="panel-avatar" id="panel-avatar"></div>
                     <div class="group-name-container">
@@ -947,7 +950,7 @@ const Chats = {
         }
     },
 
-    scrollToBottom(list) {
+    scrollToBottomBtn(list) {
         const scrollBtn = document.getElementById('scroll-to-bottom-btn');
         if (!scrollBtn || !list) return;
         scrollBtn.addEventListener('click', () => {
@@ -1005,18 +1008,19 @@ const Chats = {
         if (this.allMessagesLoaded || this.isLoadingMessage) return;
         this.isLoadingMessage = true;
 
-        const oldScrollTop = list.scrollTop;
-        const oldScrollHeight = list.scrollHeight;
+        const firstVisible = list.firstElementChild;
+        const anchorTop = firstVisible ? firstVisible.getBoundingClientRect().top : null;
 
         await this.loadMessages(this.currentChatId, true);
 
-        requestAnimationFrame(() => {
-            const newScrollHeight = list.scrollHeight;
-            list.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
-            this.isLoadingMessage = false;
-            this.updateFloatingDate();
-            this.scrollToBottom(list);
-        });
+        if (firstVisible && anchorTop !== null) {
+            const newTop = firstVisible.getBoundingClientRect().top;
+            list.scrollTop += newTop - anchorTop;
+            console.log('new top', list.scrollTop);
+        }
+        this.isLoadingMessage = false;
+        this.updateFloatingDate();
+        this.scrollToBottomBtn(list);
     },
 
     renderMessages(messages, append = false) {
@@ -1039,6 +1043,14 @@ const Chats = {
                                 <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
                             </button>
                         </div>
+                        <button type="button" id="selection-delete-btn" class="selection-action-btn" title="Delete" style="display:none;">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>
+                        </button>
+                        <span id="selection-count" class="selection-count" style="display:none;">0 selected</span>
+                        <button type="button" id="selection-cancel-btn" class="selection-action-btn" title="Cancel" style="display:none;">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                        </button>
+                        <div id="selection-actions" class="selection-actions"></div>
                     </form>
                 </div>
                 <div id="chat-info-panel" class="chat-info-panel"></div>
@@ -1160,11 +1172,10 @@ const Chats = {
         } else  {
             elementsToInsert.forEach(el => list.appendChild(el));
             list.scrollTop = list.scrollHeight;
+            console.log('old top', list.scrollTop);
             this.observeMessages();
             this.updateFloatingDate();
-            this.scrollToBottom(list);
-            const floatingDate = document.getElementById('floating-date');
-            let hideTimeout;
+            this.scrollToBottomBtn(list);
             list.addEventListener('scroll', () => {
                 if (list.scrollTop === 0 && !this.allMessagesLoaded && !this.isLoadingMessage) {
                     this.loadMoreMessages(list);
@@ -1280,22 +1291,30 @@ const Chats = {
                     video.loop = true;
                     div.appendChild(video);
                 } else {
-                    const icon = document.createElement('div');
-                    icon.className = 'file-icon';
-                    icon.textContent = '📄 ' + file.name;
-                    div.appendChild(icon);
+                    let ext = '';
+                    const dotIndex = file.name.lastIndexOf('.');
+                    if (dotIndex !== -1) {
+                        ext = file.name.substring(dotIndex + 1).toUpperCase();
+                    } else {
+                        ext = file.type.split('/')[1]?.toUpperCase() || 'FILE';
+                    }
+
+                    const fileDiv = document.createElement('div');
+                    fileDiv.className = 'preview-item file-item';
+                    fileDiv.innerHTML = `
+                        <div class="file-icon">
+                            <span class="file-ext">${escapeHtml(ext)}</span>
+                        </div>
+                        <span class="file-name">${escapeHtml(file.name)}</span>
+                    `;
+                    div.appendChild(fileDiv);
                 }
 
                 const nameSpan = document.createElement('span');
-                nameSpan.className = 'file-name';
+                nameSpan.className = 'file-name-hidden';
                 nameSpan.textContent = file.name;
                 nameSpan.style.display = 'none';
                 div.appendChild(nameSpan);
-
-                const progressContainer = document.createElement('div');
-                progressContainer.className = 'progress-container';
-                progressContainer.innerHTML = '<div class="progress-bar" style="width:0%"></div>';
-                div.appendChild(progressContainer);
 
                 const removeBtn = document.createElement('button');
                 removeBtn.className = 'remove-preview';
@@ -1304,10 +1323,10 @@ const Chats = {
                     div.remove();
                     if (previewContainer.children.length === 0) {
                         previewContainer.remove();
+                        const fileInput = document.getElementById('file-input');
+                        fileInput.value = '';
+                        this.updateSendBtn();
                     }
-                    const fileInput = document.getElementById('file-input');
-                    fileInput.value = '';
-                    this.updateSendBtn();
                 };
                 div.appendChild(removeBtn);
                 previewContainer.appendChild(div);
@@ -1326,6 +1345,7 @@ const Chats = {
 
         const isOwn = (Api.userId && msg.sender_id === Api.userId);
         const isGroup = this.currentChatDetail && this.currentChatDetail.chat.type === 'group';
+        const isAdmin = this.currentChatDetail.current_role === 'admin' || this.currentChatDetail.current_role === 'owner';
         let member = null;
         let wrapper = null;
 
@@ -1347,7 +1367,7 @@ const Chats = {
         const replyBlockHtml = msg.reply_to_id
             ? `<div class="reply-block" data-reply-id="${msg.reply_to_id}">
                 <span class="reply-sender">${escapeHtml(msg.reply_sender_name || 'Unknown')}</span>
-                <span class="reply-text">Decrypting...</span>
+                <span class="reply-text">...</span>
             </div>`
             : '';
         let mediaHtml = '';
@@ -1359,6 +1379,13 @@ const Chats = {
                     if (mediaData.media_ids && mediaData.media_ids.length > 0) {
                         mediaHtml = this._renderMediaPreview(mediaData);
                         displayText = mediaData.text;
+                    }
+                    const mediaTypes = mediaData.media_types || [];
+                    const mediaNames = mediaData.media_names || [];
+                    const mediaContainer = div.querySelector('.media-container');
+                    if (mediaContainer) {
+                        mediaContainer.dataset.mediaTypes = JSON.stringify(mediaTypes);
+                        mediaContainer.dataset.mediaNames = JSON.stringify(mediaNames);
                     }
                     div.classList.add('has-media');
                 } catch (e) {
@@ -1416,6 +1443,32 @@ const Chats = {
             this._messageObserver.observe(div);
         }
 
+        div.addEventListener('click', (e) => {
+            if (this._ignoreNextClick) {
+                this._ignoreNextClick = false;
+                return;
+            }
+            if (!this.selectionModeActive) return;
+            if (e.target.closest('button, a, img, video, .file-preview, .play-icon, .video-preview-wrapper')) return;
+            e.stopPropagation();
+            this.toggleSelectMessage(msg.id);
+        });
+
+        let longPressTimer;
+        div.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            longPressTimer = setTimeout(() => {
+                if (!this.selectionModeActive) {
+                    this._ignoreNextClick = true;
+                    this.startSelection(msg.id);
+                }
+                longPressTimer = null;
+            }, 500);
+        })
+
+        div.addEventListener('mouseup', () => clearTimeout(longPressTimer));
+        div.addEventListener('mouseleave', () => clearTimeout(longPressTimer));
+
         if (msg.reply_to_id) {
             const replyBlock = div.querySelector('.reply-block');
             if (replyBlock) {
@@ -1425,7 +1478,11 @@ const Chats = {
             }
         }
 
-        div.addEventListener('contextmenu', (e) => this.showContextMenu(e, msg));
+        div.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            if (this.selectionModeActive) return;
+            this.showContextMenu(e, msg);
+        });
         if (wrapper) {
             wrapper.dataset.sentAt = msg.sent_at;
             wrapper.appendChild(div);
@@ -1512,9 +1569,23 @@ const Chats = {
         if (this.mediaUrlCache.has(cacheKey)) {
             return this.mediaUrlCache.get(cacheKey);
         }
-        const response = await fetch(`/media/${mediaId}`, {
-            headers: { 'Authorization': `Bearer ${Api.authToken}` }
-        });
+
+        const fetchWithAuth = async (token) => {
+            return await fetch(`/media/${mediaId}`, {
+                headers: { 'Authorization': `Bearer ${Api.authToken}` }
+            });
+        };
+        let response = await fetchWithAuth(Api.authToken);
+
+        if (response.status === 401) {
+            const refreshed = await Api.refreshToken();
+            if (refreshed) {
+                response = await fetchWithAuth(Api.authToken)
+            } else {
+                window.location.hash = '#login';
+                throw new Error('Session expired');
+            }
+        }
         if (!response.ok) throw new Error('Failed to download file');
 
         const encryptedBuffer = await response.arrayBuffer();
@@ -1591,7 +1662,14 @@ const Chats = {
                             const img = document.createElement('img');
                             img.src = url;
                             img.className = 'media-preview-img';
-                            img.addEventListener('click', () => Api.openMediaViewer(url, mimeType, fileName, mediaText));
+                            img.addEventListener('click', (e) => {
+                                if (this.selectionModeActive) {
+                                    e.stopPropagation();
+                                    this.toggleSelectMessage(msg.id);
+                                    return;
+                                }
+                                Api.openMediaViewer(url, mimeType, fileName, mediaText);
+                            });
                             parent.appendChild(img);
                         } else if (mimeType.startsWith('video/')) {
                             const wrapper = document.createElement('div');
@@ -1611,6 +1689,10 @@ const Chats = {
                                 }
                             })
                             video.addEventListener('click', (e) => {
+                                if (this.selectionModeActive) {
+                                    this.toggleSelectMessage(msg.id);
+                                    return;
+                                }
                                 e.stopPropagation();
                                 Api.openMediaViewer(url, mimeType, fileName, mediaText);
                             })
@@ -1657,6 +1739,14 @@ const Chats = {
                             </div>
                             <span class="file-name">${escapeHtml(fileName)}</span>
                         `;
+                        link.addEventListener('click', (e) => {
+                            if (this.selectionModeActive) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                this.toggleSelectMessage(msg.id);
+                                return;
+                            }
+                        });
                         fileList.appendChild(link);
                     }
                 }
@@ -1694,7 +1784,10 @@ const Chats = {
             cellsHtml += `<div class="${className}" data-media-id="${mediaIds[i]}"></div>`;
         }
         return `
-            <div class="media-container" data-media-ids="${mediaIds.join(',')}">
+            <div class="media-container" 
+                data-media-ids="${mediaIds.join(',')}"
+                data-media-types='${JSON.stringify(mediaTypes)}'
+                data-media-names='${JSON.stringify(mediaNames)}'>
                 <div class="media-grid">
                     ${cellsHtml}
                 </div>
@@ -1728,6 +1821,238 @@ const Chats = {
 
     },
 
+    startSelection(msgId) {
+        this.selectionModeActive = true;
+        this.selectedMessages.add(msgId);
+        this.updateSelectionUI();
+    },
+
+    toggleSelectMessage(msgId) {
+        if (!this.selectionModeActive) this.selectionModeActive = true;
+        if (this.selectedMessages.has(msgId)) {
+            this.selectedMessages.delete(msgId);
+        } else {
+            this.selectedMessages.add(msgId);
+        }
+
+        if (this.selectedMessages.size === 0) {
+            this.selectionModeActive = false;
+        }
+        this.updateSelectionUI();
+    },
+
+    clearSelection() {
+        this.selectedMessages.clear();
+        this.selectionModeActive = false;
+        this.updateSelectionUI();
+    },
+
+    collectSelectedMessagesInfo() {
+        const infos = [];
+        for (const id of this.selectedMessages) {
+            const msgDiv = document.querySelector(`.message[data-message-id="${id}"]`);
+            if (!msgDiv) continue;
+            const info = {
+                id: id,
+                senderId: msgDiv.dataset.senderId,
+                text: msgDiv.querySelector('.message-content')?.textContent.trim() || '',
+                isOwn: msgDiv.dataset.senderId === Api.userId,
+                mediaItems: [],
+                content_type: 'text'
+            };
+            const mediaContainer = msgDiv.querySelector('.media-container');
+            if (mediaContainer) {
+                const mediaIdsStr = mediaContainer.dataset.mediaIds;
+                if (mediaIdsStr) {
+                    const mediaIds = mediaIdsStr.split(',');
+                    const mediaTypes = JSON.parse(mediaContainer.dataset.mediaTypes || '[]');
+                    const mediaNames = JSON.parse(mediaContainer.dataset.mediaNames || '[]');
+                    mediaIds.forEach((id, index) => {
+                        info.mediaItems.push({
+                            id: id,
+                            mimeType: mediaTypes[index] || 'application/octet-stream',
+                            fileName: mediaNames[index] || 'Noname file'
+                        });
+                    });
+                    info.content_type = 'media';
+                }
+            }
+            infos.push(info);
+        }
+        infos.sort((a, b) => {
+            const elA = document.querySelector(`.message[data-message-id="${a.id}"]`);
+            const elB = document.querySelector(`.message[data-message-id="${b.id}"]`);
+            if (!elA || !elB) return 0;
+            return (elA.compareDocumentPosition(elB) & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1;
+        });
+        return infos;
+    },
+
+    async handleSelectionAction(action) {
+        const selectedInfos = this.collectSelectedMessagesInfo();
+        switch (action) {
+            case 'delete': {
+                await this.deleteSelectedMessages();
+                break;
+            }
+            case 'copy-text': {
+                const texts = selectedInfos.map(info => info.text).filter(Boolean);
+                if (texts.length > 0) {
+                    await navigator.clipboard.writeText(texts.join('\n'));
+                }
+                break;
+            }
+            case 'download-media': {
+                for (const info of selectedInfos) {
+                    await this.downloadMediaItems(info.mediaItems);
+                }
+                break;
+            }
+            case 'reply': {
+                if (selectedInfos.length === 1) {
+                    const info = selectedInfos[0];
+                    this.showReplyTo({
+                        id: info.id, 
+                        sender_id: info.senderId, 
+                        text: info.text, 
+                        mediaItems: info.mediaItems,
+                    });
+                    this.clearSelection();
+                }
+                break;
+            }
+            case 'edit': {
+                if (selectedInfos.length === 1 && selectedInfos[0].isOwn) {
+                    const info = selectedInfos[0];
+                    this.startEditMessage({ 
+                        id: info.id, 
+                        content_type: info.content_type, 
+                        text: info.text 
+                    });
+                    this.clearSelection();
+                }
+                break;
+            }
+            case 'cancel': {
+                this.clearSelection();
+                break;
+            }
+        }
+    },
+
+    async downloadMediaItems(mediaItems) {
+        for (let i = 0; i < mediaItems.length; i++) {
+            const item = mediaItems[i];
+            const url = await this.downloadAndDecryptFile(item.id, item.mimeType, this.currentChatSharedKey);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = item.fileName;
+            a.click();
+            await new Promise(resolve => setTimeout(resolve, 300));
+        }
+    },
+
+    updateSelectionUI() {
+        const actionPanel = document.getElementById('selection-actions');
+        const count = this.selectedMessages.size;
+        const attachBtn = document.getElementById('attach-btn');
+        const msgInput = document.getElementById('message-input');
+        const sendBtnContainer = document.getElementById('send-btn-container');
+        const selectionCount = document.getElementById('selection-count');
+        const selectionDeleteBtn = document.getElementById('selection-delete-btn');
+        const selectionCancelBtn = document.getElementById('selection-cancel-btn');
+        const main = document.getElementById('main');
+        if (main) {
+            main.classList.toggle('selection-mode', count > 0);
+        }
+
+        if (count > 0) {
+            attachBtn.style.display = 'none';
+            msgInput.style.display = 'none';
+            sendBtnContainer.style.display = 'none';
+            selectionCount.style.display = 'inline';
+            selectionCancelBtn.style.display = 'inline';
+            selectionDeleteBtn.style.display = 'inline';
+
+            const selectedInfos = this.collectSelectedMessagesInfo();
+            const canDelete = selectedInfos.every(info => info.isOwn) || ['admin', 'owner'].includes(this.currentChatDetail?.current_role);
+            const hasSingle = count === 1;
+            const hasMedia = selectedInfos.some(info => info.mediaItems.length > 0);
+            const allText = selectedInfos.map(info => info.text).filter(Boolean).join('\n');
+            actionPanel.classList.add('open');
+            let panelHtml = '';
+
+            if (hasSingle) {
+                const info = selectedInfos[0];
+                if (info.isOwn) {
+                    panelHtml += `<button class="selection-action-btn" data-action="edit" title="Edit">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                    </button>`;
+                }
+                panelHtml += `<button class="selection-action-btn" data-action="reply" title="Reply">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"></polyline><path d="M20 20v-7a4 4 0 0 0-4-4H4"></path></svg>
+                </button>`;
+            }
+            if (allText.trim()) {
+                panelHtml += `<button class="selection-action-btn" data-action="copy-text" title="Copy text">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                </button>`;
+            }
+            if (hasMedia) {
+                   panelHtml += `<button class="selection-action-btn" data-action="download-media" title="Download media">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                   </button>`;
+            }
+            actionPanel.innerHTML = panelHtml;
+
+            selectionDeleteBtn.style.display = 'inline-block';
+            if (canDelete) {
+                selectionDeleteBtn.style.visibility = 'visible';
+                selectionDeleteBtn.onclick = () => this.handleSelectionAction('delete');
+            } else {
+                selectionDeleteBtn.style.visibility = 'hidden';
+            }
+            selectionCount.textContent = `${count} selected`;
+            selectionCancelBtn.onclick = () => this.handleSelectionAction('cancel');
+
+            actionPanel.querySelectorAll('button').forEach(btn => {
+                btn.addEventListener('click', () => this.handleSelectionAction(btn.dataset.action));
+            });
+        } else {
+            attachBtn.style.display = '';
+            msgInput.style.display = '';
+            sendBtnContainer.style.display = '';
+            selectionCount.style.display = 'none';
+            selectionDeleteBtn.style.display = 'none';
+            selectionCancelBtn.style.display = 'none';
+            actionPanel.classList.remove('open');
+            actionPanel.innerHTML = '';
+        }
+        document.querySelectorAll('.message').forEach(div => {
+            div.classList.toggle('selected', this.selectedMessages.has(div.dataset.messageId));
+        });
+    },
+
+    async deleteSelectedMessages() {
+        if (!confirm('Are you sure you want to delete this message?')) return;
+        if (this.selectedMessages.size === 0) return;
+
+        const messageIds = Array.from(this.selectedMessages);
+        try {
+            await Api.post(`/chats/${this.currentChatId}/messages/delete-bulk`, {message_ids: messageIds});
+            messageIds.forEach(id => {
+                const msgDiv = document.querySelector(`.message[data-message-id="${id}"]`);
+                if (msgDiv) msgDiv.remove();
+            });
+            this.clearSelection();
+            const list = document.getElementById('messages-list');
+            if (list) this.cleanupDateSeparators(list);
+            this.renderLastMessage(this.currentChatId);
+        } catch (err) {
+            alert('Failed to delete selected messages: ' + err.message);
+        }
+    },
+
     showContextMenu(e, msg) {
         e.preventDefault();
         const existing = document.getElementById('context-menu');
@@ -1739,21 +2064,38 @@ const Chats = {
 
         const items = [];
 
-        items.push({
-            text: 'Reply',
-            action: () => this.showReplyTo(msg)
-        });
+        const isAdmin = this.currentChatDetail?.current_role === 'admin' || this.currentChatDetail?.current_role === 'owner';
 
         let textToCopy = msg.text;
+        const replyData = {
+            id: msg.id,
+            sender_id: msg.sender_id,
+            text: msg.text,
+            mediaItems: [],
+        }
         if (['image', 'video', 'file'].includes(msg.content_type) && textToCopy.startsWith('{')) {
             try {
                 const mediaData = JSON.parse(textToCopy);
                 textToCopy = mediaData.text;
+                const mediaTypes = mediaData.media_types || [];
+                const mediaNames = mediaData.media_names || [];
+                const ids = mediaData.media_ids || [];
+                replyData.mediaItems = ids.map((mid, idx) => ({
+                    id: mid,
+                    mimeType: mediaTypes[idx] || 'application/octet-stream',
+                    fileName: mediaNames[idx] || 'Noname file',
+                }));
             } catch (e) {
-                console.error('Failed to parse text', e);
+                replyData.mediaItems = [];
                 return;
             }
         }
+
+        items.push({
+            text: 'Reply',
+            action: () => this.showReplyTo(replyData)
+        });
+
         if (textToCopy.trim() !== '') {
             items.push({
                 text: 'Copy Text',
@@ -1769,6 +2111,11 @@ const Chats = {
 
         if (msg.sender_id === Api.userId) {
             items.push({ text: 'Edit', action: () => this.startEditMessage(msg) });
+        }
+
+        items.push({ text: 'Select', action: () => this.startSelection(msg.id) });
+
+        if (msg.sender_id === Api.userId || isAdmin) {
             items.push({ text: 'Delete', action: () => this.deleteMessage(msg) });
         }
 
@@ -1777,6 +2124,7 @@ const Chats = {
         items.forEach(item => {
             const itemEl = document.createElement('div');
             itemEl.className = 'context-menu-item';
+            if (item.text === 'Delete') itemEl.classList.add('delete-item');
             itemEl.textContent = item.text;
             itemEl.addEventListener('click', () => {
                 item.action();
@@ -1934,8 +2282,20 @@ const Chats = {
         });
     },
 
-    showReplyTo(msg) {
-        this.replyToMsg = msg;
+    showReplyTo(replyData) {
+        const {id, sender_id, text, mediaItems} = replyData;
+        this.replyToMsg = {id, sender_id, text, mediaItems};
+        let content = text || '';
+
+        if (mediaItems && mediaItems.length > 0) {
+            const first = mediaItems[0];
+            const mime = first.mimeType || 'application/octet-stream';
+            let mediaType = '';
+            if (mime.startsWith('image/')) mediaType = '📷 Image';
+            else if (mime.startsWith('video/')) mediaType = '🎬 Video';
+            else mediaType = '📄 File'
+            content = mediaType + (text ? ` · ${text}` : '');
+        }
         let previewContainer = document.getElementById('reply-preview');
         if (!previewContainer) {
             previewContainer = document.createElement('div');
@@ -1944,35 +2304,16 @@ const Chats = {
             const form = document.getElementById('message-form');
             form.parentNode.insertBefore(previewContainer, form);
         }
-        let content = msg.text || '';
-        if (['image', 'video', 'file'].includes(msg.content_type)) {
-            if (msg.text && msg.text.startsWith('{')) {
-                let mediaType = '';
-                try {
-                    const data = JSON.parse(msg.text);
-                    const mime = data.media_types ? data.media_types[0].split('/')[0] : 'file';
-                    if (mime === 'image') mediaType = '📷 Image';
-                    else if (mime === 'video') mediaType = '🎬 Video';
-                    else mediaType = '📄 File'
-                    if (data.text !== '') {
-                        content = `${mediaType} · ${data.text || ''}`.trim();
-                    } else {
-                        content = `${mediaType}`.trim();
-                    }
-                } catch (e) {
-                    content = 'Media';
-                }
-            } else {
-                content = msg.content_type;
-            }
-        }
-        const member = this.currentChatDetail?.members.find(m => m.user_id === msg.sender_id);
+
+        const member = this.currentChatDetail?.members.find(m => m.user_id === sender_id);
         previewContainer.innerHTML = `
             <div class="reply-preview-content">
                 <span class="reply-preview-name">${escapeHtml(member ? (member.display_name || member.username) : 'Unknown')}</span>
                 <span class="reply-preview-text">${escapeHtml(content)}</span>
             </div>
-            <button id="cancel-reply-btn" class="icon-btn">✕</button>
+            <button id="cancel-reply-btn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
         `;
         previewContainer.style.display = 'flex';
 
@@ -1989,7 +2330,7 @@ const Chats = {
     updateFileProgress(fileName, percent) {
         const previewItems = document.querySelectorAll('.preview-item');
         previewItems.forEach(item => {
-            const nameSpan = item.querySelector('.file-name');
+            const nameSpan = item.querySelector('.file-name-hidden');
             if (nameSpan && nameSpan.textContent === fileName) {
                 const bar = item.querySelector('.progress-bar');
                 if (bar) {
@@ -2003,7 +2344,7 @@ const Chats = {
     removeFilePreview(fileName) {
         const previewItems = document.querySelectorAll('.preview-item');
         previewItems.forEach(item => {
-            const nameSpan = item.querySelector('.file-name');
+            const nameSpan = item.querySelector('.file-name-hidden');
             if (nameSpan && nameSpan.textContent === fileName) {
                 item.remove();
             }
@@ -2067,12 +2408,26 @@ const Chats = {
                 return;
             }
         }
-        contentDiv.innerHTML = `<input type="text" class="edit-input" value="${escapeHtml(oldText)}">`;
-        const input = contentDiv.querySelector('.edit-input');
-        input.focus();
+        const rect = contentDiv.getBoundingClientRect();
+        const oldWidth = rect.width;
+        const oldHeight = rect.height;
+        const textarea = document.createElement('textarea');
+        textarea.className = 'edit-textarea';
+        textarea.value = escapeHtml(oldText);
+        textarea.style.width = oldWidth + 'px';
+        textarea.style.height = Math.max(oldHeight, 24) + 'px';
+        contentDiv.innerHTML = '';
+        contentDiv.appendChild(textarea);
+
+        const adjustHeight = () => {
+            textarea.style.height = 'auto';
+            textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
+        };
+        textarea.addEventListener('input', adjustHeight);
+        adjustHeight();
 
         const finishEdit = async () => {
-            const newText = input.value.trim();
+            const newText = textarea.value.trim();
             if (newText === '' || newText === oldText) {
                 contentDiv.textContent = oldText;
                 return;
@@ -2107,17 +2462,16 @@ const Chats = {
                 msg.text = oldText;
             }
         };
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
+        textarea.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 finishEdit();
             } else if (e.key === 'Escape') {
                 contentDiv.textContent = oldText;
             }
         });
-        input.addEventListener('blur', () => {
-            finishEdit();
-        });
+        textarea.addEventListener('blur', finishEdit);
+        textarea.focus();
     },
 
     async deleteMessage(msg) {
@@ -2412,7 +2766,7 @@ const Chats = {
                 if (msg.sender_id === Api.userId || (list.scrollTop + list.clientHeight >= list.scrollHeight - 150)) {
                     list.scrollTop = list.scrollHeight;
                 }
-                this.scrollToBottom(list);
+                this.scrollToBottomBtn(list);
                 if (msg.sender_id !== Api.userId) {
                     const chat = this.chats.find(c => c.id === msg.chat_id);
                     if (chat) {
@@ -2518,7 +2872,7 @@ const Chats = {
                 }, {once: true});
             }
         }
-        this.loadChats();
+        this.renderLastMessage(payload.chat_id);
     },
 
     onMessageDelivered(payload) {

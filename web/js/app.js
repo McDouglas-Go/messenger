@@ -6,14 +6,23 @@ function requireAuth() {
     return true;
 }
 
-function logout() {
+async function logout() {
     if (Chats.ws) {
         Chats.ws.close(1000, 'logout');  
     }
-    Api.post('/logout').then(() => {
-        Api.clearToken();
-        window.location.hash = '#login';
-    });
+    const userId = Api.userId;
+
+    await Api.post('/logout');
+    Api.clearToken();
+
+    if (typeof KeyStorage !== 'undefined' && KeyStorage.deleteKeys && userId) {
+        try {
+            await KeyStorage.deleteKeys(String(userId));
+        } catch (e) {
+            console.error('Failed to delete user keys', e);
+        }
+    }
+    window.location.hash = '#login';
 }
 
 function renderChats(container) {

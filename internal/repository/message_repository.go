@@ -274,6 +274,9 @@ func (r *pgMessageRepository) Delete(ctx context.Context, messageID string) erro
 	if _, err := tx.Exec(ctx, `DELETE FROM media WHERE message_id = $1`, messageID); err != nil {
 		return fmt.Errorf("delete media records: %w", err)
 	}
+	if _, err := tx.Exec(ctx, `UPDATE messages SET reply_to_id = NULL WHERE reply_to_id = $1`, messageID); err != nil {
+		return fmt.Errorf("clear reply references: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM messages WHERE id = $1`, messageID); err != nil {
 		return fmt.Errorf("delete message: %w", err)
 	}

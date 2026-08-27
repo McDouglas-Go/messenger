@@ -42,10 +42,13 @@ const Auth = {
         const html = `
             <div class="modal-content">
                 <h3>Encryption Keys Required</h3>
-                <p>No encryption keys found. Please choose an option:</p>
+                <p>No encryption keys found</p>
+                <p>Download your keys from other session to save access to all previous messages.
+                Filename must looks like <b>your_username-your_id.json</b></p>
+                <p>Generate new keys if you have not key file (You will lose access to previous messages in this session)</p>
                 <div class="modal-buttons">
-                    <button id="generate-keys-btn">Generate New Keys</button>
                     <button id="upload-key-btn">Upload Key File</button>
+                    <button id="generate-keys-btn">Generate New Keys</button>
                 </div>
             </div>
         `;
@@ -136,8 +139,8 @@ const Auth = {
             <div class="auth-form">
                 <h2>Sign Up</h2>
                 <form id="register-form">
-                    <input type="text" id="reg-username" placeholder="Username" required>
                     <input type="email" id="reg-email" placeholder="Email" required>
+                    <input type="text" id="reg-username" placeholder="Username" required>
                     <input type="text" id="reg-displayname" placeholder="Display Name" required>
                     <input type="password" id="reg-password" placeholder="Password" required>
                     <input type="password" id="reg-password-confirm" placeholder="Confirm Password" required>

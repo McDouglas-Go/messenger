@@ -35,6 +35,7 @@ type MesssageService interface {
 		contentType model.ContentType,
 	) (*model.EncryptedMessage, error)
 	DeleteMessage(ctx context.Context, userID, chatID, messageID string) error
+	DeleteMessages(ctx context.Context, userID, chatID string, messageIDs []string) error
 }
 
 type messageService struct {
@@ -289,5 +290,15 @@ func (s *messageService) DeleteMessage(ctx context.Context, userID, chatID, mess
 			s.hub.SendToUser(member.UserID, event)
 		}
 	}
+	return nil
+}
+
+func (s *messageService) DeleteMessages(ctx context.Context, userID, chatID string, messageIDs []string) error {
+	for _, msgID := range messageIDs {
+		if err := s.DeleteMessage(ctx, userID, chatID, msgID); err != nil {
+			return fmt.Errorf("delete message %s: %w", msgID, err)
+		}
+	}
+
 	return nil
 }

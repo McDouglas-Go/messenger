@@ -53,7 +53,7 @@ const Api = {
                 response = await fetch(url, options);
             } else {
                 window.location.hash = '#login';
-                return Promise.reject(new Error('Not authenticated'));
+                throw new Error('Not authenticated');
             }
         }
 
@@ -91,7 +91,9 @@ const Api = {
             } catch (e) {
                 return false;
             } finally {
-                refreshPromise = null;
+                setTimeout(() => {
+                    refreshPromise = null;
+                }, 1000);
             }
         })();
 
@@ -358,18 +360,29 @@ const Api = {
     async loadMediaUrl(mediaUrl) {
         if (!mediaUrl) return null;
 
-        try {
-            const response = await fetch(mediaUrl, {
-                headers: { 'Authorization': `Bearer ${Api.authToken}` }
+        const fetchWithAuth = async (token) => {
+            return await fetch(mediaUrl, {
+                headers: { 'Authorization': `Bearer ${token}` }
             });
-            if (!response.ok) return null;
+        };
 
-            const blob = await response.blob();
-            return URL.createObjectURL(blob);
-        } catch (e) {
-            console.error('Failed to load avatar', e);
+        let response = await fetchWithAuth(this.authToken);
+
+        if (response.status === 401) {
+            const refreshed = await this.refreshToken();
+            if (refreshed) {
+                response = await fetchWithAuth(this.authToken);
+            } else {
+                window.location.hash = '#login';
+                return null;
+            }
+        }
+        if (!response.ok) {
+            console.error('Failed to load media', response.status);
             return null;
         }
+        const blob = await response.blob();
+        return URL.createObjectURL(blob);
     },
 
     async getUserAvatar(userId, profilePhotoUrl) {
