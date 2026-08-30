@@ -13,12 +13,13 @@ import (
 type MessageRepository interface {
 	Create(ctx context.Context, msg *model.EncryptedMessage) error
 	GetChatMessages(ctx context.Context, chatID string, limit, offset int) ([]*model.EncryptedMessage, error)
+	GetByID(ctx context.Context, id string) (*model.EncryptedMessage, error)
 	GetLastMessage(ctx context.Context, chatID string) (*model.EncryptedMessage, error)
 	GetAllMessages(ctx context.Context, chatID string) ([]*model.EncryptedMessage, error)
 	GetUnreadCountByChat(ctx context.Context, chatID, userID string) (int, error)
-	GetByID(ctx context.Context, id string) (*model.EncryptedMessage, error)
+	MarkDelivered(ctx context.Context, messageID string) error
+	MarkAsRead(ctx context.Context, messageID, userID string) (bool, error)
 	Update(ctx context.Context, msg *model.EncryptedMessage) error
-	UpdateStatus(ctx context.Context, messageID string, status model.MessageStatus) error
 	Delete(ctx context.Context, messageID string) error
 }
 
@@ -199,13 +200,61 @@ func (r *pgMessageRepository) GetAllMessages(ctx context.Context, chatID string)
 
 func (r *pgMessageRepository) GetUnreadCountByChat(ctx context.Context, chatID, userID string) (int, error) {
 	var count int
-	query := `SELECT COUNT(*) FROM messages WHERE chat_id = $1 AND sender_id != $2 AND status != 'read'`
+	query := `
+        SELECT COUNT(*)
+        FROM messages m
+        LEFT JOIN message_reads mr ON m.id = mr.message_id AND mr.user_id = $2
+        WHERE m.chat_id = $1
+          AND m.sender_id != $2
+          AND mr.message_id IS NULL
+    `
 	err := r.pool.QueryRow(ctx, query, chatID, userID).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("count unread messages: %w", err)
 	}
 
 	return count, nil
+}
+
+func (r *pgMessageRepository) MarkDelivered(ctx context.Context, messageID string) error {
+	_, err := r.pool.Exec(ctx, "UPDATE messages SET status = $1 WHERE id = $2", model.StatusDelivered, messageID)
+	if err != nil {
+		return fmt.Errorf("mark delivered: %w", err)
+	}
+
+	return nil
+}
+
+func (r *pgMessageRepository) MarkAsRead(ctx context.Context, messageID, userID string) (bool, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	query := `
+        INSERT INTO message_reads (message_id, user_id)
+        VALUES ($1, $2)
+        ON CONFLICT DO NOTHING`
+
+	result, err := tx.Exec(ctx, query, messageID, userID)
+	if err != nil {
+		return false, fmt.Errorf("insert message read: %w", err)
+	}
+
+	isFirstRead := result.RowsAffected() > 0
+	if isFirstRead {
+		_, err = tx.Exec(ctx, `UPDATE messages SET status = 'read' WHERE id = $1`, messageID)
+		if err != nil {
+			return false, fmt.Errorf("update read_by_some: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit transaction: %w", err)
+	}
+
+	return isFirstRead, nil
 }
 
 func (r *pgMessageRepository) Update(ctx context.Context, msg *model.EncryptedMessage) error {
@@ -229,15 +278,6 @@ func (r *pgMessageRepository) Update(ctx context.Context, msg *model.EncryptedMe
 			return fmt.Errorf("message not found")
 		}
 		return fmt.Errorf("update message: %w", err)
-	}
-
-	return nil
-}
-
-func (r *pgMessageRepository) UpdateStatus(ctx context.Context, messageID string, status model.MessageStatus) error {
-	_, err := r.pool.Exec(ctx, "UPDATE messages SET status = $1 WHERE id = $2", status, messageID)
-	if err != nil {
-		return fmt.Errorf("Update message status: %w", err)
 	}
 
 	return nil

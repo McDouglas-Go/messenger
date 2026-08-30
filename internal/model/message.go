@@ -29,5 +29,4 @@ type EncryptedMessage struct {
 	SentAt           time.Time     `json:"sent_at"`
 	EditedAt         *time.Time    `json:"edited_at,omitempty"`
 	ReplyToID        *string       `json:"reply_to_id,omitempty"`
-	ReplyPreview     *string       `json:"reply_preview,omitempty"`
 }

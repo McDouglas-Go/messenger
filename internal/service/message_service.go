@@ -28,7 +28,7 @@ type MesssageService interface {
 	GetByID(ctx context.Context, messageID, userID, chatID string) (*model.EncryptedMessage, error)
 	GetChatHistory(ctx context.Context, chatID, userID string, limit, offset int) ([]*model.EncryptedMessage, error)
 	MarkDelivered(ctx context.Context, messageID string) error
-	MarkAsRead(ctx context.Context, messageID string) error
+	MarkAsRead(ctx context.Context, messageID, userID string) error
 	EditMessage(ctx context.Context,
 		userID, chatID, messageID string,
 		encryptedContent, nonce []byte,
@@ -166,8 +166,8 @@ func (s *messageService) MarkDelivered(ctx context.Context, messageID string) er
 	if msg == nil {
 		return fmt.Errorf("message not found")
 	}
-	if err := s.msgRepo.UpdateStatus(ctx, messageID, model.StatusDelivered); err != nil {
-		return fmt.Errorf("update status: %w", err)
+	if err := s.msgRepo.MarkDelivered(ctx, messageID); err != nil {
+		return fmt.Errorf("mark delivered: %w", err)
 	}
 
 	event := map[string]interface{}{
@@ -181,7 +181,7 @@ func (s *messageService) MarkDelivered(ctx context.Context, messageID string) er
 	return nil
 }
 
-func (s *messageService) MarkAsRead(ctx context.Context, messageID string) error {
+func (s *messageService) MarkAsRead(ctx context.Context, messageID, userID string) error {
 	msg, err := s.msgRepo.GetByID(ctx, messageID)
 	if err != nil {
 		return fmt.Errorf("get message: %w", err)
@@ -189,18 +189,21 @@ func (s *messageService) MarkAsRead(ctx context.Context, messageID string) error
 	if msg == nil {
 		return fmt.Errorf("message not found")
 	}
-	if err := s.msgRepo.UpdateStatus(ctx, messageID, model.StatusRead); err != nil {
+	isFirstRead, err := s.msgRepo.MarkAsRead(ctx, messageID, userID)
+	if err != nil {
 		return fmt.Errorf("update status: %w", err)
 	}
 
-	event := map[string]interface{}{
-		"event": "messages_read",
-		"data": map[string]string{
-			"message_id": messageID,
-			"chat_id":    msg.ChatID,
-		},
+	if isFirstRead {
+		event := map[string]interface{}{
+			"event": "messages_read",
+			"data": map[string]string{
+				"message_id": messageID,
+				"chat_id":    msg.ChatID,
+			},
+		}
+		s.hub.SendToUser(msg.SenderID, event)
 	}
-	s.hub.SendToUser(msg.SenderID, event)
 	return nil
 }
 

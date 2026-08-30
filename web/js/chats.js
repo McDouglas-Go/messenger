@@ -974,10 +974,9 @@ const Chats = {
             main.classList.remove('chat-open');
             main.innerHTML = '<div class="loading">Loading messages…</div>';
         }
-        const embed = ['reply_preview'];
 
         try {
-            const messages = await Api.getMessages(chatId, 50, this.currentOffset, embed);
+            const messages = await Api.getMessages(chatId, 50, this.currentOffset);
             messages.reverse(); 
             if (!append) this.currentOffset = 0;
             this.currentOffset += messages.length;
@@ -1008,16 +1007,26 @@ const Chats = {
         if (this.allMessagesLoaded || this.isLoadingMessage) return;
         this.isLoadingMessage = true;
 
-        const firstVisible = list.firstElementChild;
-        const anchorTop = firstVisible ? firstVisible.getBoundingClientRect().top : null;
+        const listRect = list.getBoundingClientRect();
+        let anchor = null;
+        for (const child of list.children) {
+            if (child.classList.contains('floating-date-wrapper')) continue;
+            const rect = child.getBoundingClientRect();
+            if (rect.bottom > listRect.top) {
+                anchor = child;
+                break;
+            }
+        }
+        if (!anchor) {
+            this.isLoadingMessage = false;
+            return;
+        }
+        const anchorTop = anchor.getBoundingClientRect().top;
 
         await this.loadMessages(this.currentChatId, true);
 
-        if (firstVisible && anchorTop !== null) {
-            const newTop = firstVisible.getBoundingClientRect().top;
-            list.scrollTop += newTop - anchorTop;
-            console.log('new top', list.scrollTop);
-        }
+        const newTop = anchor.getBoundingClientRect().top;
+        list.scrollTop += newTop - anchorTop;
         this.isLoadingMessage = false;
         this.updateFloatingDate();
         this.scrollToBottomBtn(list);
@@ -1172,7 +1181,6 @@ const Chats = {
         } else  {
             elementsToInsert.forEach(el => list.appendChild(el));
             list.scrollTop = list.scrollHeight;
-            console.log('old top', list.scrollTop);
             this.observeMessages();
             this.updateFloatingDate();
             this.scrollToBottomBtn(list);
@@ -1355,8 +1363,10 @@ const Chats = {
             wrapper.className = 'message-wrapper';
             const avatarDiv = document.createElement('div');
             avatarDiv.className = 'message-avatar';
-            avatarDiv.dataset.userId = msg.sender_id;
-            this.loadAvatar(avatarDiv, msg.sender_id, member.profile_photo_url);
+            if (member) {
+                avatarDiv.dataset.userId = msg.sender_id;
+                this.loadAvatar(avatarDiv, msg.sender_id, member.profile_photo_url);
+            }
             wrapper.appendChild(avatarDiv);
         }
 
@@ -2047,7 +2057,7 @@ const Chats = {
             this.clearSelection();
             const list = document.getElementById('messages-list');
             if (list) this.cleanupDateSeparators(list);
-            this.renderLastMessage(this.currentChatId);
+            await this.renderLastMessage(this.currentChatId);
         } catch (err) {
             alert('Failed to delete selected messages: ' + err.message);
         }
@@ -2080,6 +2090,7 @@ const Chats = {
                 const mediaTypes = mediaData.media_types || [];
                 const mediaNames = mediaData.media_names || [];
                 const ids = mediaData.media_ids || [];
+                replyData.text = mediaData.text
                 replyData.mediaItems = ids.map((mid, idx) => ({
                     id: mid,
                     mimeType: mediaTypes[idx] || 'application/octet-stream',
@@ -2260,13 +2271,13 @@ const Chats = {
                         const messageId = msgDiv.dataset.messageId;
                         const senderId = msgDiv.dataset.senderId;
                         const statusEl = msgDiv.querySelector('.message-status');
-                        if (senderId !== Api.userId && statusEl && !statusEl.classList.contains('read')) {
+                        if (senderId !== Api.userId) {
                             statusEl.classList.add('read');
-                            Api.post(`/chats/${this.currentChatId}/messages/${messageId}/read`).then(() => {
+                            Api.post(`/chats/${this.currentChatId}/messages/${messageId}/read`).then( () => {
                                 const chat = this.chats.find(c => c.id === this.currentChatId);
                                 if (chat && chat.unreadCount > 0) {
                                     chat.unreadCount--;
-                                    this.renderLastMessage(chat.id);
+                                    this.renderLastMessage(this.currentChatId);
                                     this.updateChatsButtonBadge();
                                 }
                             }).catch(e => console.error('Failed to mark read', e));
@@ -2294,7 +2305,7 @@ const Chats = {
             if (mime.startsWith('image/')) mediaType = '📷 Image';
             else if (mime.startsWith('video/')) mediaType = '🎬 Video';
             else mediaType = '📄 File'
-            content = mediaType + (text ? ` · ${text}` : '');
+            content = mediaType + (text.trim() ? ` · ${text}` : '');
         }
         let previewContainer = document.getElementById('reply-preview');
         if (!previewContainer) {

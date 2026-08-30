@@ -128,11 +128,8 @@ const Api = {
     createGroupChat(name, memberIds) { 
         return this.post('/chats/group', { name, member_ids: memberIds }); 
     },
-    getMessages(chatId, limit = 50, offset = 0, embed = []) {
+    getMessages(chatId, limit = 50, offset = 0) {
         let url = `/chats/${chatId}/messages?limit=${limit}&offset=${offset}`;
-        embed.forEach(param => {
-            url += `&embed=${encodeURIComponent(param)}`;
-        })
         return this.get(url);
     },
     sendMessage(chatId, encryptedContent, nonce, contentType, replyToId = null) {

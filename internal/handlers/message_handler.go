@@ -165,15 +165,6 @@ func (h *MessageHandler) GetChatHistory(w http.ResponseWriter, r *http.Request) 
 		offset = 0
 	}
 
-	embedParams := r.URL.Query()["embed"]
-	embedReply := false
-	for _, p := range embedParams {
-		switch p {
-		case "reply_preview":
-			embedReply = true
-		}
-	}
-
 	messages, err := h.messageService.GetChatHistory(r.Context(), chatID, claims.UserID, limit, offset)
 	if err != nil {
 		h.log.Error("failed to get messages", "error", err)
@@ -202,7 +193,7 @@ func (h *MessageHandler) GetChatHistory(w http.ResponseWriter, r *http.Request) 
 			ReplyToID:        msg.ReplyToID,
 		}
 
-		if embedReply && msg.ReplyToID != nil {
+		if msg.ReplyToID != nil {
 			original, err := h.messageService.GetByID(r.Context(), *msg.ReplyToID, claims.UserID, msg.ChatID)
 			if err == nil && original != nil {
 				previewData := map[string]string{
@@ -240,7 +231,7 @@ func (h *MessageHandler) MarkAsRead(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Message not found", http.StatusNotFound)
 		return
 	}
-	if err := h.messageService.MarkAsRead(r.Context(), messageID); err != nil {
+	if err := h.messageService.MarkAsRead(r.Context(), messageID, claims.UserID); err != nil {
 		h.log.Error("MarkDelivered failed", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return

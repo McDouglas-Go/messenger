@@ -45,7 +45,14 @@ CREATE TABLE messages (
     status VARCHAR(20) NOT NULL DEFAULT 'sent',
     sent_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     edited_at TIMESTAMPTZ,
-    reply_to_id UUID REFERENCES messages(id)
+    reply_to_id UUID REFERENCES messages(id),
+);
+
+CREATE TABLE message_reads (
+    message_id UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    read_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (message_id, user_id)
 );
 
 CREATE INDEX idx_messages_chat_sent ON messages (chat_id, sent_at);

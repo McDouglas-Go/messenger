@@ -1915,6 +1915,7 @@ body.auth-page #main {
     width: 100%;
     height: 100%;
     object-fit: cover;
+    border-radius: 8px;
 }
 
 .media-preview-img, .media-preview-video:hover {

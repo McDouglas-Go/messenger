@@ -1,4 +1,5 @@
 DROP TABLE IF EXISTS group_encryption_keys;
+DROP TABLE IF EXISTS message_reads;
 DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS media;
 DROP TABLE IF EXISTS messages;
