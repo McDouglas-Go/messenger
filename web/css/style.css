@@ -425,6 +425,13 @@ body.auth-page #main {
     left: 0;
     right: auto;
 }
+#create-chat-btn {
+    align-items: center;
+    transition: transform 0.3s ease;
+}
+#create-chat-btn.open {
+    transform: rotate(45deg);
+}
 #chat-menu-dropdown {
     right: 0;
 }
@@ -914,11 +921,24 @@ body.auth-page #main {
     box-shadow: 0 2px 8px rgba(0,0,0,0.1);
     position: relative;
 }
-
-.edit-panel-btn, .save-panel-btn {
-    right: 0;
-    top: 0;
-    transition: transform 0.2s ease, opacity 0.2s ease;
+.edit-actions {
+    position: absolute;
+    top: 15px;
+    right: 15px;
+    display: flex;
+    gap: 10px;
+    z-index: 2;
+}
+.edit-panel-btn {
+    position: absolute;
+    top: 15px;
+    right: 15px;
+    transition: opacity 0.2s, transform 0.2s;
+    z-index: 2;
+}
+.cancel-panel-btn svg {
+    width: 22px;
+    height: 22px;
 }
 .group-name-container {
     position: relative;        
@@ -927,6 +947,7 @@ body.auth-page #main {
     justify-content: center;
     margin-bottom: 20px;
     min-height: 40px;
+    width: 90%;
 }
 .group-name-text {
     font-size: 1.5em;
@@ -942,6 +963,7 @@ body.auth-page #main {
     outline: none;
     text-align: center;
     width: 100%;
+    box-sizing: border-box;
     margin: 10px 0;
     padding: 4px;
     background: transparent;
@@ -950,6 +972,23 @@ body.auth-page #main {
 @keyframes highlightField {
     from { border-bottom-color: transparent; }
     to   { border-bottom-color: #4a90d9; }
+}
+.remove-group-avatar-btn { background: #e74c3c; }
+.group-info {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+}
+.members-section {
+    width: 100%;
+    text-align: left;
+    margin-top: 20px;
+}
+.group-avatar-container, .profile-avatar-container {
+    position: relative;
+    display: inline-block;
+    margin-bottom: 20px;
 }
 #add-members-inline-btn {
     width: 28px;
@@ -1359,6 +1398,21 @@ body.auth-page #main {
     height: 100%;
     object-fit: cover;
 }
+.avatar-editing {
+    outline: 2px solid #4a90d9;
+    outline-offset: 2px;
+    border-radius: 50%;
+    cursor: pointer;
+}
+.avatar-action-menu {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 5px;
+    z-index: 100;
+    min-width: 140px;
+}
 .message-avatar {
     width: 40px;
     height: 40px;
@@ -1467,6 +1521,16 @@ body.auth-page #main {
 }
 
 /* profile */
+#main.chat-open .profile-page {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 200;
+    background: #efeae2;
+    overflow-y: auto;
+}
 .profile-page {
     padding: 0 15px;
     max-width: 750px;
@@ -1474,7 +1538,6 @@ body.auth-page #main {
     min-width: 350px;
     margin: 30px auto;
 }
-
 .profile-card {
     background: white;
     border-radius: 12px;
@@ -1525,27 +1588,6 @@ body.auth-page #main {
 .profile-avatar.editing {
     cursor: pointer;
 }
-.avatar-dropdown {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-.avatar-dropdown button {
-    padding: 8px 16px;
-    border: 1px solid #ddd;
-    border-radius: 6px;
-    background: white;
-    cursor: pointer;
-    font-size: 14px;
-    white-space: nowrap;
-}
-.avatar-dropdown button:hover {
-    background: #f5f5f5;
-}
-.avatar-dropdown button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
 .avatar-editor-inline {
     margin-top: 20px;
     text-align: center;
@@ -1555,6 +1597,21 @@ body.auth-page #main {
     border-radius: 8px;
     margin-bottom: 10px;
 }
+.avatar-canvas-wrapper {
+    width: 300px;
+    height: 300px;
+    border-radius: 50%;
+    overflow: hidden;
+    position: relative;
+    margin: 0 auto;
+}
+.avatar-canvas-wrapper canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    border-radius: 50%;
+}
+
 .avatar-editor-inline input[type="range"] {
     width: 200px;
     margin: 10px auto;
@@ -1603,6 +1660,17 @@ body.auth-page #main {
     justify-content: flex-end;
     gap: 10px;
     margin-top: 20px;
+}
+textarea.profile-input {
+    min-height: 20px;
+    resize: none;
+    overflow-y: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    line-height: 1.4;
+}
+textarea.profile-input::-webkit-scrollbar {
+    display: none;
 }
 .profile-editor-actions button {
     padding: 8px 16px;

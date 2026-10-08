@@ -80,7 +80,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     const createChatBtn = document.getElementById('create-chat-btn');
     if (createChatBtn) {
-        createChatBtn.addEventListener('click', () => Chats.showCreateChatMenu());
+        createChatBtn.addEventListener('click', () => Chats.showCreateChatMenu(createChatBtn));
     }
 });
 

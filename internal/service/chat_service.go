@@ -8,6 +8,7 @@ import (
 
 	"github.com/McDouglas-Go/messenger/internal/model"
 	"github.com/McDouglas-Go/messenger/internal/repository"
+	"github.com/McDouglas-Go/messenger/internal/ws"
 )
 
 type ChatWithInfo struct {
@@ -32,12 +33,13 @@ type ChatDetail struct {
 }
 
 type MemberInfo struct {
-	UserID          string `json:"user_id"`
-	UserName        string `json:"username"`
-	DisplayName     string `json:"display_name"`
-	Role            string `json:"role"`
-	JoinetAt        string `json:"joined_at"`
-	ProfilePhotoUrl string `json:"profile_photo_url,omitempty"`
+	UserID                  string `json:"user_id"`
+	UserName                string `json:"username"`
+	DisplayName             string `json:"display_name"`
+	Role                    string `json:"role"`
+	JoinetAt                string `json:"joined_at"`
+	ProfilePhotoUrl         string `json:"profile_photo_url,omitempty"`
+	ProfilePhotoOriginalURL string `json:"profile_photo_original_url,omitempty"`
 }
 
 type ChatService interface {
@@ -45,7 +47,7 @@ type ChatService interface {
 	CreateGroup(ctx context.Context, name, creatorID string, memberIDs []string) (*model.Chat, error)
 	GetUserChats(ctx context.Context, userID string) ([]*ChatWithInfo, error)
 	GetChatWithMembers(ctx context.Context, chatID, userID string) (*ChatDetail, error)
-	UpdateChat(ctx context.Context, userID, chatID string, name *string) (*model.Chat, error)
+	UpdateChat(ctx context.Context, userID, chatID string, name, groupPhotoURL, groupPhotoOriginalURL *string, removeGroupPhoto bool) (*model.Chat, error)
 	AddMembers(ctx context.Context, userID, chatID string, memberIDs []string) error
 	RemoveMember(ctx context.Context, userID, chatID, targetUserID string) error
 	DeleteChat(ctx context.Context, userID, chatID string) error
@@ -55,14 +57,16 @@ type chatService struct {
 	chatRepo repository.ChatRepository
 	userRepo repository.UserRepository
 	msgRepo  repository.MessageRepository
+	hub      *ws.Hub
 	baseURL  string
 }
 
-func NewChatService(chatRepo repository.ChatRepository, userRepo repository.UserRepository, msgRepo repository.MessageRepository, baseURL string) ChatService {
+func NewChatService(chatRepo repository.ChatRepository, userRepo repository.UserRepository, msgRepo repository.MessageRepository, hub *ws.Hub, baseURL string) ChatService {
 	return &chatService{
 		chatRepo: chatRepo,
 		userRepo: userRepo,
 		msgRepo:  msgRepo,
+		hub:      hub,
 		baseURL:  baseURL,
 	}
 }
@@ -217,16 +221,19 @@ func (s *chatService) GetChatWithMembers(ctx context.Context, chatID, userID str
 			currentRole = string(m.Role)
 		}
 		profilePhotoURL := ""
-		if user.ProfilePhotoURL != "" {
+		profilePhotoOriginalURL := ""
+		if user.ProfilePhotoURL != "" && user.ProfilePhotoOriginalURL != "" {
 			profilePhotoURL = s.baseURL + "/media/" + user.ProfilePhotoURL
+			profilePhotoOriginalURL = s.baseURL + "/media/" + user.ProfilePhotoOriginalURL
 		}
 		memberInfos = append(memberInfos, &MemberInfo{
-			UserID:          m.UserID,
-			UserName:        user.Username,
-			DisplayName:     user.DisplayName,
-			Role:            string(m.Role),
-			JoinetAt:        m.JoinedAt.Format("2006-01-02T15:04:05Z"),
-			ProfilePhotoUrl: profilePhotoURL,
+			UserID:                  m.UserID,
+			UserName:                user.Username,
+			DisplayName:             user.DisplayName,
+			Role:                    string(m.Role),
+			JoinetAt:                m.JoinedAt.Format("2006-01-02T15:04:05Z"),
+			ProfilePhotoUrl:         profilePhotoURL,
+			ProfilePhotoOriginalURL: profilePhotoOriginalURL,
 		})
 	}
 	return &ChatDetail{
@@ -268,7 +275,7 @@ func (s *chatService) findExistingPrivateChat(ctx context.Context, userID1, user
 	return nil, nil
 }
 
-func (s *chatService) UpdateChat(ctx context.Context, userID, chatID string, name *string) (*model.Chat, error) {
+func (s *chatService) UpdateChat(ctx context.Context, userID, chatID string, name, groupPhotoURL, groupPhotoOriginalURL *string, removeGroupPhoto bool) (*model.Chat, error) {
 	chat, err := s.chatRepo.GetByID(ctx, chatID)
 	if err != nil {
 		return nil, fmt.Errorf("get chat: %w", err)
@@ -293,8 +300,37 @@ func (s *chatService) UpdateChat(ctx context.Context, userID, chatID string, nam
 		}
 		chat.Name = name
 	}
-	if err := s.chatRepo.Update(ctx, chat); err != nil {
+
+	oldPhotoURL := chat.GroupPhotoURL
+	oldOriginalPhotoURL := chat.GroupPhotoOriginalURL
+	if removeGroupPhoto {
+		chat.GroupPhotoURL = ""
+		chat.GroupPhotoOriginalURL = ""
+	} else if groupPhotoURL != nil {
+		chat.GroupPhotoURL = *groupPhotoURL
+		chat.GroupPhotoOriginalURL = *groupPhotoOriginalURL
+	}
+
+	oldMediaIDs := []string{}
+	if oldPhotoURL != "" {
+		oldMediaIDs = append(oldMediaIDs, oldPhotoURL, oldOriginalPhotoURL)
+	}
+	if err := s.chatRepo.Update(ctx, chat, oldMediaIDs); err != nil {
 		return nil, fmt.Errorf("update chat: %w", err)
+	}
+
+	members, err := s.chatRepo.GetChatMembers(ctx, chatID)
+	if err != nil {
+		return nil, fmt.Errorf("get chat members: %w", err)
+	}
+	event := map[string]interface{}{
+		"event": "group_updated",
+		"data": map[string]string{
+			"chat_id": chatID,
+		},
+	}
+	for _, m := range members {
+		s.hub.SendToUser(m.UserID, event)
 	}
 
 	return chat, nil

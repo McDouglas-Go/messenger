@@ -355,7 +355,7 @@ const Api = {
     },
 
     async loadMediaUrl(mediaUrl) {
-        if (!mediaUrl) return null;
+        if (!mediaUrl || !mediaUrl.trim()) return null;
 
         const fetchWithAuth = async (token) => {
             return await fetch(mediaUrl, {
@@ -382,12 +382,12 @@ const Api = {
         return URL.createObjectURL(blob);
     },
 
-    async getUserAvatar(userId, profilePhotoUrl) {
-        if (!userId || !profilePhotoUrl) return null;
-        const cached = this.avatarCache.get(userId);
+    async getAvatar(objectId, photoUrl) {
+        if (!objectId || !photoUrl) return null;
+        const cached = this.avatarCache.get(objectId);
         if (cached) return cached;
-        const blobUrl = await this.loadMediaUrl(profilePhotoUrl);
-        if (blobUrl) this.avatarCache.set(userId, blobUrl);
+        const blobUrl = await this.loadMediaUrl(photoUrl);
+        if (blobUrl) this.avatarCache.set(objectId, blobUrl);
         return blobUrl;
     },
 };

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 	"unicode"
@@ -14,6 +13,7 @@ import (
 	"github.com/McDouglas-Go/messenger/internal/auth"
 	"github.com/McDouglas-Go/messenger/internal/model"
 	"github.com/McDouglas-Go/messenger/internal/repository"
+	"github.com/McDouglas-Go/messenger/internal/ws"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -37,19 +37,21 @@ type LoginInput struct {
 }
 
 type UpdateProfileInput struct {
-	DisplayName     *string `json:"display_name,omitempty"`
-	About           *string `json:"about,omitempty"`
-	ProfilePhotoURL *string `json:"profile_photo_url,omitempty"`
-	PublicKey       *string `json:"public_key,omitempty"`
-	RemoveAvatar    bool    `json:"remove_avatar,omitempty"`
+	DisplayName             *string `json:"display_name,omitempty"`
+	About                   *string `json:"about,omitempty"`
+	ProfilePhotoURL         *string `json:"profile_photo_url,omitempty"`
+	ProfileOriginalPhotoURL *string `json:"profile_photo_original_url,omitempty"`
+	PublicKey               *string `json:"public_key,omitempty"`
+	RemoveAvatar            bool    `json:"remove_avatar,omitempty"`
 }
 
 type authService struct {
 	userRepo    repository.UserRepository
+	chatRepo    repository.ChatRepository
 	sessionRepo repository.SessionRepository
+	hub         *ws.Hub
 	jwtManager  *auth.JWTManager
 	refreshTTL  time.Duration
-	logger      *slog.Logger
 }
 
 type AuthSerice interface {
@@ -65,17 +67,19 @@ type AuthSerice interface {
 
 func NewAuthService(
 	userRepo repository.UserRepository,
+	chatRepo repository.ChatRepository,
 	sessionRepo repository.SessionRepository,
+	hub *ws.Hub,
 	jwtManager *auth.JWTManager,
 	refreshTTL time.Duration,
-	logger *slog.Logger,
 ) AuthSerice {
 	return &authService{
 		userRepo:    userRepo,
+		chatRepo:    chatRepo,
 		sessionRepo: sessionRepo,
+		hub:         hub,
 		jwtManager:  jwtManager,
 		refreshTTL:  refreshTTL,
-		logger:      logger,
 	}
 }
 
@@ -282,10 +286,16 @@ func (s *authService) UpdateProfile(ctx context.Context, userID string, input Up
 	if input.About != nil {
 		user.About = *input.About
 	}
+
+	oldMiniAvatarID := ""
 	if input.RemoveAvatar {
+		oldMiniAvatarID = user.ProfilePhotoURL
 		user.ProfilePhotoURL = ""
-	} else if input.ProfilePhotoURL != nil {
+		user.ProfilePhotoOriginalURL = ""
+	} else if input.ProfilePhotoURL != nil && *input.ProfilePhotoURL != user.ProfilePhotoURL {
+		oldMiniAvatarID = user.ProfilePhotoURL
 		user.ProfilePhotoURL = *input.ProfilePhotoURL
+		user.ProfilePhotoOriginalURL = *input.ProfileOriginalPhotoURL
 	}
 	if input.PublicKey != nil {
 		user.PublicKey = input.PublicKey
@@ -294,8 +304,34 @@ func (s *authService) UpdateProfile(ctx context.Context, userID string, input Up
 	if len(user.DisplayName) == 0 {
 		return nil, fmt.Errorf("%w: display_name must be between 1 and 100 characters", ErrValidation)
 	}
-	if err := s.userRepo.Update(ctx, user); err != nil {
+	if err := s.userRepo.Update(ctx, user, oldMiniAvatarID); err != nil {
 		return nil, fmt.Errorf("update user: %w", err)
+	}
+
+	chats, err := s.chatRepo.GetUserchats(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user chats for avatar broadcast: %w", err)
+	}
+	recipients := make(map[string]bool)
+	for _, chat := range chats {
+		members, err := s.chatRepo.GetChatMembers(ctx, chat.ID)
+		if err != nil {
+			continue
+		}
+		for _, m := range members {
+			if m.UserID != userID {
+				recipients[m.UserID] = true
+			}
+		}
+	}
+	event := map[string]interface{}{
+		"event": "profile_updated",
+		"data": map[string]string{
+			"user_id": userID,
+		},
+	}
+	for uid := range recipients {
+		s.hub.SendToUser(uid, event)
 	}
 
 	return user, nil

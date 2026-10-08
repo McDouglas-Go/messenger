@@ -35,7 +35,10 @@ func chatToResponse(chat *model.Chat) chatResponse {
 }
 
 type updateChatRequest struct {
-	Name *string `json:"name,omitempty"`
+	Name                  *string `json:"name,omitempty"`
+	GroupPhotoURL         *string `json:"group_photo_url,omitempty"`
+	GroupPhotoOriginalURL *string `json:"group_photo_original_url,omitempty"`
+	RemoveGroupPhoto      bool    `json:"remove_group_photo,omitempty"`
 }
 
 type addMembersRequest struct {
@@ -49,14 +52,16 @@ type removeMemberRequest struct {
 type ChatHandler struct {
 	chatService     service.ChatService
 	groupKeyService service.GroupService
+	baseURL         string
 	hub             *ws.Hub
 	log             *slog.Logger
 }
 
-func NewChatHandler(chatService service.ChatService, groupKeyService service.GroupService, hub *ws.Hub, logger *slog.Logger) *ChatHandler {
+func NewChatHandler(chatService service.ChatService, groupKeyService service.GroupService, baseURL string, hub *ws.Hub, logger *slog.Logger) *ChatHandler {
 	return &ChatHandler{
 		chatService:     chatService,
 		groupKeyService: groupKeyService,
+		baseURL:         baseURL,
 		hub:             hub,
 		log:             logger,
 	}
@@ -251,31 +256,37 @@ func (h *ChatHandler) GetUserChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type chatInfo struct {
-		ID          string                  `json:"id"`
-		Type        string                  `json:"type"`
-		Name        *string                 `json:"name,omitempty"`
-		CreatedBy   string                  `json:"created_by"`
-		CreatedAt   string                  `json:"created_at"`
-		UpdatedAt   string                  `json:"updated_at"`
-		OtherUser   *service.UserInfo       `json:"other_user,omitempty"`
-		LastMessage *model.EncryptedMessage `json:"last_message,omitempty"`
-		SenderName  string                  `json:"sender_name,omitempty"`
-		UnreadCount int                     `json:"unread_count"`
+		ID            string                  `json:"id"`
+		Type          string                  `json:"type"`
+		Name          *string                 `json:"name,omitempty"`
+		GroupPhotoURL *string                 `json:"group_photo_url,omitempty"`
+		CreatedBy     string                  `json:"created_by"`
+		CreatedAt     string                  `json:"created_at"`
+		UpdatedAt     string                  `json:"updated_at"`
+		OtherUser     *service.UserInfo       `json:"other_user,omitempty"`
+		LastMessage   *model.EncryptedMessage `json:"last_message,omitempty"`
+		SenderName    string                  `json:"sender_name,omitempty"`
+		UnreadCount   int                     `json:"unread_count"`
 	}
 
 	respList := make([]chatInfo, 0, len(chatsWithInfo))
 	for _, cwi := range chatsWithInfo {
+		groupPhotoURL := ""
+		if cwi.Chat.GroupPhotoURL != "" {
+			groupPhotoURL = h.baseURL + "/media/" + cwi.Chat.GroupPhotoURL
+		}
 		ci := chatInfo{
-			ID:          cwi.Chat.ID,
-			Type:        string(cwi.Chat.Type),
-			Name:        cwi.Chat.Name,
-			CreatedBy:   cwi.Chat.CreatedBy,
-			CreatedAt:   cwi.Chat.CreatedAt.Format(time.RFC3339),
-			UpdatedAt:   cwi.Chat.UpdatedAt.Format(time.RFC3339),
-			OtherUser:   cwi.OtherUser,
-			LastMessage: cwi.LastMessage,
-			SenderName:  cwi.SenderName,
-			UnreadCount: cwi.UnreadCount,
+			ID:            cwi.Chat.ID,
+			Type:          string(cwi.Chat.Type),
+			Name:          cwi.Chat.Name,
+			GroupPhotoURL: &groupPhotoURL,
+			CreatedBy:     cwi.Chat.CreatedBy,
+			CreatedAt:     cwi.Chat.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:     cwi.Chat.UpdatedAt.Format(time.RFC3339),
+			OtherUser:     cwi.OtherUser,
+			LastMessage:   cwi.LastMessage,
+			SenderName:    cwi.SenderName,
+			UnreadCount:   cwi.UnreadCount,
 		}
 		respList = append(respList, ci)
 	}
@@ -291,6 +302,10 @@ func (h *ChatHandler) GetChatWithMembers(w http.ResponseWriter, r *http.Request)
 	claims, _ := middleware.GetClaimsFromContext(r.Context())
 	chatID := mux.Vars(r)["chat_id"]
 	result, err := h.chatService.GetChatWithMembers(r.Context(), chatID, claims.UserID)
+	if result.Chat.GroupPhotoURL != "" && result.Chat.GroupPhotoOriginalURL != "" {
+		result.Chat.GroupPhotoURL = h.baseURL + "/media/" + result.Chat.GroupPhotoURL
+		result.Chat.GroupPhotoOriginalURL = h.baseURL + "/media/" + result.Chat.GroupPhotoOriginalURL
+	}
 	if err != nil {
 		h.log.Error("GetChatWithParticipants failed", "error", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -311,7 +326,9 @@ func (h *ChatHandler) UpdateChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	chat, err := h.chatService.UpdateChat(r.Context(), claims.UserID, chatID, req.Name)
+	defer r.Body.Close()
+
+	chat, err := h.chatService.UpdateChat(r.Context(), claims.UserID, chatID, req.Name, req.GroupPhotoURL, req.GroupPhotoOriginalURL, req.RemoveGroupPhoto)
 	if err != nil {
 		h.log.Error("UpdateChat failed", "error", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)

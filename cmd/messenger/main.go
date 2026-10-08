@@ -57,14 +57,14 @@ func main() {
 	mediaRepo := repository.NewMediaRepository(pool)
 	hub := ws.NewHub(chatRepo, logger)
 
-	authService := service.NewAuthService(userRepo, sessionRepo, jwtManager, cfg.RefreshTokenTTL, logger)
-	chatServise := service.NewChatService(chatRepo, userRepo, msgRepo, cfg.BaseURL)
+	authService := service.NewAuthService(userRepo, chatRepo, sessionRepo, hub, jwtManager, cfg.RefreshTokenTTL)
+	chatServise := service.NewChatService(chatRepo, userRepo, msgRepo, hub, cfg.BaseURL)
 	groupKeyService := service.NewGroupService(groupKeyRepo)
 	messageService := service.NewMessageService(msgRepo, chatRepo, mediaRepo, hub, logger)
 	mediaService := service.NewMediaService(mediaRepo, msgRepo, chatRepo, cfg.UploadDir)
 
-	authHandler := handlers.NewAuthHandler(authService, userRepo, chatRepo, cfg.BaseURL, cfg.RefreshTokenTTL, cookieSecure, hub, logger)
-	chatHandler := handlers.NewChatHandler(chatServise, groupKeyService, hub, logger)
+	authHandler := handlers.NewAuthHandler(authService, userRepo, cfg.BaseURL, cfg.RefreshTokenTTL, cookieSecure, logger)
+	chatHandler := handlers.NewChatHandler(chatServise, groupKeyService, cfg.BaseURL, hub, logger)
 	messageHandler := handlers.Newmessagehandler(messageService, userRepo, cfg.BaseURL, logger)
 	mediaHandler := handlers.NewMediahandler(mediaService, logger)
 	wsHandler := handlers.NewWSHandler(hub, jwtManager, logger)
@@ -88,6 +88,7 @@ func main() {
 	api.HandleFunc("/sessions/{id}", authHandler.RevokeSession).Methods("DELETE")
 
 	api.HandleFunc("/users", authHandler.SearchUsers).Methods("GET")
+	api.HandleFunc("/users/{id}", authHandler.GetUserByID).Methods("GET")
 	api.HandleFunc("/users/{id}/public-key", authHandler.GetUserPublicKey).Methods("GET")
 
 	api.HandleFunc("/chats/private", chatHandler.CreatePrivate).Methods("POST")

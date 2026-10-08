@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/McDouglas-Go/messenger/internal/model"
 	"github.com/jackc/pgx/v5"
@@ -15,7 +17,7 @@ type UserRepository interface {
 	GetByUsername(ctx context.Context, username string) (*model.User, error)
 	GetByID(ctx context.Context, id string) (*model.User, error)
 	SearchByUsername(ctx context.Context, query string, limit int) ([]*model.User, error)
-	Update(ctx context.Context, user *model.User) error
+	Update(ctx context.Context, user *model.User, oldMiniAvatarID string) error
 	Delete(ctx context.Context, id string) error
 }
 
@@ -112,7 +114,7 @@ func (r *pgUserRepository) GetByUsername(ctx context.Context, username string) (
 
 func (r *pgUserRepository) GetByID(ctx context.Context, id string) (*model.User, error) {
 	query := `
-        SELECT id, username, email, password_hash, display_name, about, profile_photo_url, public_key, created_at, updated_at
+        SELECT id, username, email, password_hash, display_name, about, profile_photo_url, profile_photo_original_url, public_key, created_at, updated_at
         FROM users
         WHERE id = $1`
 
@@ -125,6 +127,7 @@ func (r *pgUserRepository) GetByID(ctx context.Context, id string) (*model.User,
 		&user.DisplayName,
 		&user.About,
 		&user.ProfilePhotoURL,
+		&user.ProfilePhotoOriginalURL,
 		&user.PublicKey,
 		&user.CreatedAt,
 		&user.UpdatedAt,
@@ -178,29 +181,54 @@ func (r *pgUserRepository) SearchByUsername(ctx context.Context, query string, l
 	return users, nil
 }
 
-func (r *pgUserRepository) Update(ctx context.Context, user *model.User) error {
+func (r *pgUserRepository) Update(ctx context.Context, user *model.User, oldMiniAvatarID string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var oldPath string
+	if strings.TrimSpace(oldMiniAvatarID) != "" {
+		err := tx.QueryRow(ctx, `SELECT file_path FROM media WHERE id = $1`, oldMiniAvatarID).Scan(&oldPath)
+		if err != nil && err != pgx.ErrNoRows {
+			return fmt.Errorf("query old media path: %w", err)
+		}
+		if oldPath != "" {
+			if _, err = tx.Exec(ctx, `DELETE FROM media WHERE id = $1`, oldMiniAvatarID); err != nil {
+				return fmt.Errorf("delete old media records: %w", err)
+			}
+		}
+	}
 	query := `
         UPDATE users
         SET display_name = $1,
             about = $2,
             profile_photo_url = $3,
-            public_key = $4,
+			profile_photo_original_url = $4,
+            public_key = $5,
             updated_at = now()
-        WHERE id = $5
+        WHERE id = $6
         RETURNING updated_at`
 
 	args := []interface{}{
 		user.DisplayName,
 		user.About,
 		user.ProfilePhotoURL,
+		user.ProfilePhotoOriginalURL,
 		user.PublicKey,
 		user.ID,
 	}
-	if err := r.pool.QueryRow(ctx, query, args...).Scan(&user.UpdatedAt); err != nil {
-		if err == pgx.ErrNoRows {
-			return fmt.Errorf("user not found")
-		}
+	if err = tx.QueryRow(ctx, query, args...).Scan(&user.UpdatedAt); err != nil {
 		return fmt.Errorf("update user: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	if oldPath != "" {
+		if err := os.Remove(oldPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove old media file : %w", err)
+		}
 	}
 
 	return nil

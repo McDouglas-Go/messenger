@@ -17,6 +17,8 @@ const Chats = {
     selectedMessages: new Set(),
     selectionModeActive: false,
     _ignoreNextClick: false,
+    _chatsLoading: false,
+    _chatsReloadPending: false,
 
     async init() {
         await this.loadChats();
@@ -24,6 +26,12 @@ const Chats = {
     },
 
     async loadChats() {
+        if (this._chatsLoading) {
+            this._chatsReloadPending = true;
+            return;
+        }
+
+        this._chatsLoading = true;
         try {
             const data = await Api.getChats();
             this.chats = data.map(chat => ({
@@ -35,16 +43,22 @@ const Chats = {
             this.initChatKeyLoading();
         } catch (err) {
             console.error('Failed to load chats:', err);
+        } finally {
+            this._chatsLoading = false;
+            if (this._chatsReloadPending) {
+                this._chatsReloadPending = false;
+                this.loadChats();
+            }
         }
     },
 
-    async loadAvatar(container, userId, profilePhotoUrl) {
-        if (!container || !userId) return;
-        if (!profilePhotoUrl) {
+    async loadAvatar(container, id, photoUrl) {
+        if (!container || !id) return;
+        if (!photoUrl) {
             container.innerHTML = '';
             return;
         }
-        const url = await Api.getUserAvatar(userId, profilePhotoUrl);
+        const url = await Api.getAvatar(id, photoUrl);
         if (url) {
             container.innerHTML = `<img src="${escapeHtml(url)}" alt="Avatar">`;
         } else {
@@ -63,15 +77,10 @@ const Chats = {
         const titleDiv = li.querySelector('.chat-title');
         if (chat.type === 'private' && chat.other_user) {
             title = chat.other_user.display_name || chat.other_user.username;
-            const avatarUrl = await Api.getUserAvatar(chat.other_user.id, chat.other_user.profile_photo_url);
-            if (avatarDiv) {
-                avatarDiv.innerHTML = avatarUrl
-                    ? `<img src="${escapeHtml(avatarUrl)}" alt="Avatar">`
-                    : '';
-            }
+            this.loadAvatar(avatarDiv, chat.other_user.id, chat.other_user.profile_photo_url);
         } else {
             title = chat.name;
-            if (avatarDiv) avatarDiv.innerHTML = '';
+            this.loadAvatar(avatarDiv, `group_${chat.id}`, chat.group_photo_url);
         }
 
         if (titleDiv) titleDiv.textContent = title;
@@ -168,6 +177,8 @@ const Chats = {
         if (!list) return;
         list.innerHTML = '';
         for (const chat of this.chats) {
+            const existing = document.getElementById(`chat-${chat.id}`);
+            if (existing) existing.remove();
             const li = document.createElement('li');
             li.id = `chat-${chat.id}`;
             li.className = 'chat-item';
@@ -185,6 +196,7 @@ const Chats = {
                     <span class="unread-badge" style="display:none;"></span>
                 </div>
             `;
+            li.addEventListener('click', () => this.selectChat(chat.id));
             list.appendChild(li);
             await this.renderChatItem(chat.id);
         }
@@ -258,10 +270,17 @@ const Chats = {
         await this.loadMessages(chatId);
     },
 
-    showCreateChatMenu() {
+    showCreateChatMenu(button) {
+        if (!button) return;
         const menu = document.getElementById('create-chat-dropdown');
         if (!menu) return;
-        menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+        if (menu.style.display === 'block') {
+            menu.style.display = 'none';
+            button.classList.remove('open');
+        } else {
+            menu.style.display = 'block';
+            button.classList.add('open');
+        }
         if (menu.children.length === 0) {
             menu.innerHTML = `
                 <button id="create-private-btn">Private Chat</button>
@@ -452,8 +471,7 @@ const Chats = {
         if (!header || !this.currentChatDetail) return;
 
         const { chat, members, current_role } = this.currentChatDetail;
-        let title = '';
-        let subtitle = '';
+        let title = '', subtitle = '';
         let avatarHtml = `<div id="header-avatar" class="header-avatar"></div>`;
         if (chat.type === 'private') {
             const other = members.find(m => m.user_id !== Api.userId);
@@ -468,6 +486,10 @@ const Chats = {
         } else {
             title = chat.name;
             subtitle = `${members.length} members`;
+            setTimeout(() => {
+                const container = document.getElementById('header-avatar');
+                this.loadAvatar(container, `group_${chat.id}`, chat.group_photo_url);
+            }, 0);
         }
         header.innerHTML = `
             <div class="chat-header-left">
@@ -598,12 +620,25 @@ const Chats = {
                 </li>
             `).join('')
             contentHtml = `
-                ${current_role === 'owner' || current_role === 'admin' ? `<button class="edit-panel-btn icon-btn" title="Edit">✎</button>` : '' }
                 <div class="group-info">
-                    <div class="panel-avatar" id="panel-avatar"></div>
+                    ${current_role === 'owner' || current_role === 'admin' ? `
+                        <div class="edit-actions">
+                            <button class="save-panel-btn icon-btn" title="Save" style="display:none;">✓</button>
+                            <button class="cancel-panel-btn icon-btn" title="Cancel" style="display:none;">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                            </button>
+                        </div>
+                        <button class="edit-panel-btn icon-btn" title="Edit">✎</button>
+                    ` : '' }
+                    <div class="group-avatar-container">
+                        <div class="panel-avatar" id="panel-avatar"></div>
+                        <div id="avatar-action-menu" class="avatar-action-menu dropdown-menu" style="display:none;"></div>
+                    </div>
                     <div class="group-name-container">
                         <span class="group-name-text">${escapeHtml(chat.name)}</span>
                     </div>
+                </div>
+                <div class="members-section">
                     <h3>
                         Members - ${members.length}
                         ${current_role === 'owner' || current_role === 'admin' ? `<button id="add-members-inline-btn" title="Add member">+</button>` : ''}
@@ -624,28 +659,29 @@ const Chats = {
             if (other) {
                 const container = document.getElementById('panel-avatar');
                 this.loadAvatar(container, other.user_id, other.profile_photo_url);
-                avatarUrl = await Api.loadMediaUrl(other.profile_photo_url);
+                avatarUrl = await Api.loadMediaUrl(other.profile_photo_original_url);
             }
         } else {
+            const container = document.getElementById('panel-avatar');
+            this.loadAvatar(container, `group_${chat.id}`, chat.group_photo_url);
+            avatarUrl = await Api.loadMediaUrl(chat.group_photo_original_url);
             for (const m of members) {
                 const container = document.getElementById(`member-avatar-${m.user_id}`);
                 this.loadAvatar(container, m.user_id, m.profile_photo_url);
             }
         }
+        const avatarImg = document.querySelector('.panel-avatar img');
+        if (avatarImg) {
+            avatarImg.style.cursor = 'pointer';
+            const d = new Date();
+            const pad = (n) => String(n).padStart(2, '0');
+            const fileName = `picture_${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}.${pad(d.getMinutes())}.${pad(d.getSeconds())}.jpg`;
+            avatarImg.addEventListener('click', () => {
+                Api.openMediaViewer(avatarUrl, 'image/jpeg', fileName);
+            });
+        }
 
-        if (chat.type === 'private') {
-            const avatarImg = document.querySelector('.panel-avatar img');
-            if (avatarImg) {
-                const now = new Date();
-                const formattedDate = now.toISOString().replace(/:/g, '.').slice(0, 19);
-                const fileName = `Media_${formattedDate}.jpg`;
-                const other = members.find(m => m.user_id !== Api.userId);
-                avatarImg.style.cursor = 'pointer';
-                avatarImg.addEventListener('click', () => {
-                    Api.openMediaViewer(avatarUrl, 'image/jpeg', fileName);
-                });
-            }
-        } else {
+        if (chat.type === 'group') {
             const editBtn = document.querySelector('.edit-panel-btn');
             if (editBtn) {
                 editBtn.addEventListener('click', () => this.startEditGroup());
@@ -678,8 +714,13 @@ const Chats = {
 
             document.querySelectorAll('.member-item').forEach(item => {
                 item.addEventListener('click', (e) => {
-                    if (e.target.closest('.member-actions-btn') || e.target.closest('.kick-member-btn')) return;
-                    this.showUserProfile(item.dataset.userId);
+                    if (e.target.closest('.member-actions-btn')) return;
+                    const userId = item.dataset.userId;
+                    const previousView = () => {
+                        const panel = document.getElementById('chat-info-panel');
+                        if (panel) panel.classList.add('open');
+                    }
+                    this.renderUserProfile(userId, previousView);
                 });
             });
         }
@@ -700,61 +741,137 @@ const Chats = {
         const nameContainer = panel.querySelector('.group-name-container');
         const nameText = panel.querySelector('.group-name-text');
         const editBtn = panel.querySelector('.edit-panel-btn');
+        const saveBtn = panel.querySelector('.save-panel-btn');
+        const cancelBtn = panel.querySelector('.cancel-panel-btn');
         if (!nameText || !nameContainer || !editBtn) return;
 
         const oldName = nameText.textContent.trim();
+        let pendingAvatarBlob = null;
+        let pendingAvatarOriginal = null;
+        let pendingAvatarDelete = false;
+
         nameText.style.display = 'none';
         editBtn.style.display = 'none';
+        saveBtn.style.display = 'inline-block';
+        cancelBtn.style.display = 'inline-block';
         
         const input = document.createElement('input');
         input.type = 'text';
         input.className = 'edit-group-name-input';
         input.value = oldName;
         nameContainer.appendChild(input);
-
-        const saveBtn = document.createElement('button');
-        saveBtn.className = 'save-panel-btn icon-btn';
-        saveBtn.textContent = '✓';
-        saveBtn.title = 'Save';
-        nameContainer.appendChild(saveBtn);
         input.focus();
+
+        const avatarElement = panel.querySelector('#panel-avatar');
+        if (avatarElement) {
+            avatarElement.classList.add('avatar-editing');
+            avatarElement.style.cursor = 'pointer';
+            avatarElement.addEventListener('click', (e) => {
+                e.stopPropagation();
+                let menu = document.getElementById('avatar-action-menu');
+                if (!menu) return;
+                let menuHtml = `<button id="change-avatar-action">Change Avatar</button>`;
+                if (this.currentChatDetail.chat.group_photo_url) {
+                    menuHtml += `<button id="remove-avatar-action">Remove Avatar</button>`;
+                }
+                menu.innerHTML = menuHtml;
+                menu.style.display = 'block';
+                document.getElementById('change-avatar-action').onclick = async () => {
+                    menu.style.display = 'none';
+                    const result = await Profile.startAvatarEdit('group');
+                    if (result) {
+                        pendingAvatarBlob = result.croppedBlob;
+                        pendingAvatarOriginal = result.originalFile;
+                        pendingAvatarDelete = false;
+                        const tempUrl = URL.createObjectURL(pendingAvatarBlob);
+                        if (avatarElement) {
+                            avatarElement.innerHTML = `<img src="${escapeHtml(tempUrl)}" alt="Avatar">`;
+                            avatarElement.classList.add('has-image');
+                        }
+                    }
+                };
+                if (this.currentChatDetail.chat.group_photo_url) {
+                    document.getElementById('remove-avatar-action').onclick = () => {
+                        menu.style.display = 'none';
+                        if (!confirm('Remove current avatar?')) return;
+                        pendingAvatarDelete = true;
+                        pendingAvatarBlob = null;
+                        pendingAvatarOriginal = null;
+                        if (avatarElement) {
+                            avatarElement.innerHTML = '';
+                            avatarElement.classList.remove('has-image');
+                        }
+                    };
+                }
+            });
+        }
+
+        const closeMenu = () => {
+            const menu = document.getElementById('avatar-action-menu');
+            if (menu) menu.style.display = 'none';
+        }
+
+        document.addEventListener('click', closeMenu);
+
+        const resetUI = () => {
+            input.remove();
+            nameText.style.display = '';
+            editBtn.style.display = 'inline-block';
+            saveBtn.style.display = 'none';
+            cancelBtn.style.display = 'none';
+            avatarElement?.classList.remove('avatar-editing');
+            if (this.currentChatDetail?.chat?.group_photo_url) {
+                const oldUrl = this.currentChatDetail.chat.group_photo_url;
+                if (avatarElement) {
+                    avatarElement.innerHTML = `<img src="${escapeHtml(oldUrl)}" alt="Avatar">`;
+                    avatarElement.classList.add('has-image');
+                }
+            } else if (avatarElement) {
+                avatarElement.innerHTML = '';
+            }
+            document.removeEventListener('click', closeMenu);
+        }
+
+        cancelBtn.addEventListener('click', resetUI);
 
         const finishEdit = async () => {
             const newName = input.value.trim();
-            if (!newName || newName === oldName) {
-                input.remove();
-                saveBtn.remove();
-                nameText.style.display = '';
-                editBtn.style.display = '';
+            const hasNameChanged = newName !== oldName && newName !== '';
+            const hasAvatarChanged = pendingAvatarBlob !== null || pendingAvatarDelete;
+            if (!hasNameChanged && !hasAvatarChanged) {
+                resetUI();
                 return;
             }
             try {
-                await Api.put(`/chats/${this.currentChatId}`, { name: newName });
-                nameText.textContent = newName;
-                input.remove();
-                saveBtn.remove();
-                nameText.style.display = '';
-                editBtn.style.display = '';
-                this.loadChatDetail(this.currentChatId);
+                const payload = {};
+                if (hasNameChanged) payload.name = newName;
+                if (pendingAvatarDelete) {
+                    payload.remove_group_photo = true;
+                } else if (pendingAvatarBlob && pendingAvatarOriginal) {
+                    const avatarBuffer = await pendingAvatarBlob.arrayBuffer();
+                    const avatarMedia = await Api.uploadFile(avatarBuffer, pendingAvatarBlob.name, pendingAvatarBlob.type, () => {});
+                    const originalBuffer = await pendingAvatarOriginal.arrayBuffer();
+                    const originalMedia = await Api.uploadFile(originalBuffer, pendingAvatarOriginal.name, pendingAvatarOriginal.type, () => {});
+                    payload.group_photo_url = avatarMedia.id;
+                    payload.group_photo_original_url = originalMedia.id;
+                }
+
+                await Api.put(`/chats/${this.currentChatId}`, payload);
+                await this.loadChatDetail(this.currentChatId);
+                this.renderChatInfo(this.currentChatId);
                 this.renderChatInfo(this.currentChatId);
             } catch (err) {
-                alert('Failed to rename: ' + err.message);
-                input.remove();
-                saveBtn.remove();
-                nameText.style.display = '';
-                editBtn.style.display = '';
+                alert('Failed to upload avatar: ' + err.message);
             }
+            resetUI();
         };
         saveBtn.addEventListener('click', finishEdit);
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
-                   e.preventDefault();
+                e.preventDefault();
                 finishEdit();
             } else if (e.key === 'Escape') {
-                input.remove();
-                saveBtn.remove();
-                nameText.style.display = '';
-                editBtn.style.display = '';
+                resetUI();
             }
         });
     },
@@ -894,54 +1011,66 @@ const Chats = {
         }
     },
 
-    async showUserProfile(userId) {
-        const panel = document.getElementById('chat-info-panel');
-        if (!panel) return;
-        const member = this.currentChatDetail?.members.find(m => m.user_id === userId);
-        if (!member) return;
-        const isSelf = userId === Api.userId;
+    async renderUserProfile(userId, onBack) {
+        const container = document.getElementById('main');
+        if (!container) return;
 
-        const contentHtml = `
-            <div class="back-btn-container">
-                <button id="back-to-chat-info-btn" class="icon-btn back-btn" title="Back">←</button>
+        let user;
+        try {
+            user = await Api.get(`/users/${userId}`);
+        } catch (err) {
+            container.innerHTML = `<p class="error">Failed to load profile: ${err.message}</p>`;
+            return;
+        }
+        console.log('user', user);
+
+        const isSelf = (userId === Api.userId);
+        container.classList.add('chat-open');
+        container.innerHTML = `
+            <div class="profile-page">
+                <div class="profile-card">
+                    <div class="back-btn-container">
+                        <button id="back-from-user-profile" class="icon-btn back-btn" title="Back">←</button>
+                    </div>
+                    <div class="profile-info">
+                        <div class="panel-avatar" id="user-profile-avatar"></div>
+                        <h3>${escapeHtml(user.display_name)}</h3>
+                        <p class="username">@${escapeHtml(user.username)}</p>
+                        <p class="about">${escapeHtml(user.about || '')}</p>
+                        <p class="created">Registered: ${new Date(user.created_at).toLocaleDateString()}</p>
+                    </div>
+                    ${!isSelf ? `
+                        <div class="panel-actions">
+                            <button id="write-message-btn">✉ Write</button>
+                        </div>
+                    ` : ''}
+                </div>
             </div>
-            <div class="profile-info">
-                <div class="panel-avatar" id="user-profile-avatar"></div>
-                <h3>${escapeHtml(member.display_name || member.username)}</h3>
-                <p class="status">offline</p>
-                <p class="username">@${escapeHtml(member.username)}</p>
-                ${member.about ? `<p class="about">${escapeHtml(member.about)}</p>` : ''}
-            </div>
-            ${!isSelf ? `
-            <div class="panel-actions">
-                <button id="write-message-btn">✉ Write</button>
-            </div>` : ''}
         `;
-        let avatarUrl = '';
-        panel.querySelector('.panel-content').innerHTML = contentHtml;
-        const container = document.getElementById('user-profile-avatar');
-        this.loadAvatar(container, member.user_id, member.profile_photo_url);
-        avatarUrl = await Api.loadMediaUrl(member.profile_photo_url);
-
-        document.getElementById('back-to-chat-info-btn').onclick = () => {
-            this.showInfoPanel();
+        document.getElementById('back-from-user-profile').onclick = () => {
+            if (typeof onBack === 'function') onBack();
         };
-        const avatarImg = document.querySelector('.panel-avatar img');
+
+        const avatarContainer = document.getElementById('user-profile-avatar');
+        await this.loadAvatar(avatarContainer, userId, user.profile_photo_url);
+
+        const avatarImg = document.querySelector('#user-profile-avatar img');
         if (avatarImg) {
-            const now = new Date();
-            const formattedDate = now.toISOString().replace(/:/g, '.').slice(0, 19);
-            const fileName = `Media_${formattedDate}.jpg`;
             avatarImg.style.cursor = 'pointer';
-            avatarImg.addEventListener('click', () => {
-                Api.openMediaViewer(avatarUrl, 'image/jpeg', fileName);
+            avatarImg.addEventListener('click', async () => {
+                const d = new Date();
+                const pad = (n) => String(n).padStart(2, '0');
+                const fileName = `picture_${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}.${pad(d.getMinutes())}.${pad(d.getSeconds())}.jpg`;
+                const urlToOpen = await Api.loadMediaUrl(user.profile_photo_original_url);
+                Api.openMediaViewer(urlToOpen, 'image/jpeg', fileName);
             });
         }
-        if (!isSelf) {
-            document.getElementById('write-message-btn').onclick = async () => {
+        const writeBtn = document.getElementById('write-message-btn');
+        if (writeBtn) {
+            writeBtn.onclick = async () => {
                 try {
                     const chat = await Api.createPrivateChat(userId);
-                    this.hideInfoPanel();
-                    this.loadChats();
+                    await this.loadChats();
                     this.selectChat(chat.id);
                 } catch (err) {
                     alert('Could not open chat: ' + err.message);
@@ -1350,6 +1479,10 @@ const Chats = {
     appendMessage(msg, container = null) {
         if (!container) container = document.getElementById('messages-list');
         if (!container) return null;
+
+        if (document.querySelector(`.message[data-message-id="${msg.id}"]`)) {
+            return null;
+        }
 
         const isOwn = (Api.userId && msg.sender_id === Api.userId);
         const isGroup = this.currentChatDetail && this.currentChatDetail.chat.type === 'group';
@@ -2711,7 +2844,7 @@ const Chats = {
                     this.onStopTyping(payload);
                     break;
                 case 'chat_added':
-                    this.onChatAdded(payload);
+                    this.onChatAdded();
                     break;
                 case 'chat_removed':
                     this.onChatRemoved(payload);
@@ -2719,8 +2852,11 @@ const Chats = {
                 case 'chat_members_changed':
                     this.onMembersChanged(payload);
                     break;
-                case 'avatar_updated':
-                    this.onAvatarUpdated(payload);
+                case 'profile_updated':
+                    this.onProfileUpdated(payload);
+                    break;
+                case 'group_updated':
+                    this.onGroupUpdated(payload);
                     break;
                 default:
                     console.warn('Unknown WS event:', event);
@@ -2731,18 +2867,17 @@ const Chats = {
     },
 
     onNewMessage(msg) {
-        this.loadChats();
-
         if (msg.sender_id !== Api.userId) {
             Api.post(`/chats/${msg.chat_id}/messages/${msg.id}/delivered`)
                 .catch(e => console.error('Failed to mark delivered', e));
         } else {
             msg.status = 'sent';
         }
+        this.loadChats();
+
         if (this.currentChatId !== msg.chat_id) return;
 
         const key = this.chatKeys[msg.chat_id] || this.currentChatSharedKey;
-        let plainText = null;
         if(key) {
             const packed = CryptoModule.unpackEncryptedData(msg);
             CryptoModule.decrypt(key, packed).then(plain => {
@@ -2883,7 +3018,7 @@ const Chats = {
                 }, {once: true});
             }
         }
-        this.renderLastMessage(payload.chat_id);
+        this.loadChats();
     },
 
     onMessageDelivered(payload) {
@@ -2935,7 +3070,7 @@ const Chats = {
         if (typingEl) typingEl.style.display = 'none';
     },
 
-    onChatAdded(payload) {
+    onChatAdded() {
         this.loadChats();
     },
 
@@ -2964,49 +3099,34 @@ const Chats = {
             }
         });
     },
-    onAvatarUpdated(payload) {
+    onProfileUpdated(payload) {
         Api.avatarCache.delete(payload.user_id);
-        this.chats.forEach(chat => {
-            if (chat.other_user && chat.other_user.id === payload.user_id) {
-                chat.other_user.profile_photo_url = payload.profile_photo_url || null;
-                this.renderChatInfo(chat.id);
+        const affectedChats = this.chats.filter(chat => {
+            if (chat.type === 'private' && chat.other_user === payload.user_id) {
+                return true;
             }
-            if (chat.members) {
-                chat.members.forEach(m => {
-                    if (m.user_id === payload.user_id) {
-                        m.profile_photo_url = payload.profile_photo_url || null;
-                    }
-                });
-            }
+            return false;
         });
-        if (this.currentChatDetail) {
-            const member = this.currentChatDetail.members.find(m => m.user_id === payload.user_id);
-            if (member) {
-                const memberAvatarContainer = document.querySelector(`.member-item[data-user-id="${payload.user_id}"] .member-avatar`);
-                if (memberAvatarContainer) memberAvatarContainer.forEach(container => {
-                    this.loadAvatar(container, payload.user_id, payload.profile_photo_url);
-                });
-            }
-            if (this.currentChatDetail.chat.type === 'private') {
-                const other = this.currentChatDetail.members.find(m => m.user_id !== Api.userId);
-                const headerContainer = document.getElementById('header-avatar');
-                const profileAvatarContainer = document.querySelector('.panel-avatar');
-                if (other && other.user_id === payload.user_id) {
-                    if (headerContainer) {
-                        this.loadAvatar(headerContainer, payload.user_id, payload.profile_photo_url);
-                    }
-                    if (profileAvatarContainer) {
-                        this.loadAvatar(profileAvatarContainer, payload.user_id, payload.profile_photo_url);
-                    }
-                }
+        affectedChats.forEach(chat => {
+            this.renderChatInfo(chat.id);
+        });
+        if (this.currentChatDetail && this.currentChatId) {
+            const isMember = this.currentChatDetail.members?.some(m => m.user_id === payload.user_id);
+            if (isMember) {
+                this.loadChatDetail(this.currentChatId).then(() => {
+                    this.showInfoPanel();
+                })
             }
         }
-
-        const msgAvatars = document.querySelectorAll(`.message[data-sender-id="${payload.user_id}"] .message-avatar`);
-        msgAvatars.forEach(container => {
-            this.loadAvatar(container, payload.user_id, payload.profile_photo_url);
-        });
     },
+
+    onGroupUpdated(payload) {
+        Api.avatarCache.delete(`group_${payload.chat_id}`);
+        if (this.currentChatId === payload.chat_id) {
+            this.loadChatDetail(payload.chat_id);
+        }
+        this.renderChatItem(payload.chat_id);
+    }
 };
 
 function escapeHtml(text) {

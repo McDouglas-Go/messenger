@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/McDouglas-Go/messenger/internal/model"
 	"github.com/jackc/pgx/v5"
@@ -15,7 +17,7 @@ type ChatRepository interface {
 	GetUserchats(ctx context.Context, userID string) ([]*model.Chat, error)
 	AddMember(ctx context.Context, chatID, userID string, role model.MemberRole) error
 	GetChatMembers(ctx context.Context, chatID string) ([]*model.ChatMember, error)
-	Update(ctx context.Context, chat *model.Chat) error
+	Update(ctx context.Context, chat *model.Chat, oldMediaIDs []string) error
 	Delete(ctx context.Context, id string) error
 	RemoveMember(ctx context.Context, chatID, userID string) error
 	GetMember(ctx context.Context, chatID, userID string) (*model.ChatMember, error)
@@ -70,7 +72,7 @@ func (r *pgChatRepository) Create(ctx context.Context, chat *model.Chat, creator
 
 func (r *pgChatRepository) GetByID(ctx context.Context, id string) (*model.Chat, error) {
 	query := `
-        SELECT id, type, name, created_by, created_at, updated_at
+        SELECT id, type, name, group_photo_url, group_photo_original_url, created_by, created_at, updated_at
         FROM chats
         WHERE id = $1`
 
@@ -79,6 +81,8 @@ func (r *pgChatRepository) GetByID(ctx context.Context, id string) (*model.Chat,
 		&chat.ID,
 		&chat.Type,
 		&chat.Name,
+		&chat.GroupPhotoURL,
+		&chat.GroupPhotoOriginalURL,
 		&chat.CreatedBy,
 		&chat.CreatedAt,
 		&chat.UpdatedAt,
@@ -95,11 +99,14 @@ func (r *pgChatRepository) GetByID(ctx context.Context, id string) (*model.Chat,
 
 func (r *pgChatRepository) GetUserchats(ctx context.Context, userID string) ([]*model.Chat, error) {
 	query := `
-        SELECT c.id, c.type, c.name, c.created_by, c.created_at, c.updated_at
+        SELECT c.id, c.type, c.name, c.group_photo_url, c.created_by, c.created_at, c.updated_at
         FROM chats c
         INNER JOIN chat_members cm ON c.id = cm.chat_id
         WHERE cm.user_id = $1
-        ORDER BY c.updated_at DESC`
+        ORDER BY COALESCE(
+			(SELECT MAX(m.sent_at) FROM messages m WHERE m.chat_id = c.id),
+			c.created_at
+		) DESC`
 
 	rows, err := r.pool.Query(ctx, query, userID)
 	if err != nil {
@@ -114,6 +121,7 @@ func (r *pgChatRepository) GetUserchats(ctx context.Context, userID string) ([]*
 			&chat.ID,
 			&chat.Type,
 			&chat.Name,
+			&chat.GroupPhotoURL,
 			&chat.CreatedBy,
 			&chat.CreatedAt,
 			&chat.UpdatedAt,
@@ -168,20 +176,58 @@ func (r *pgChatRepository) GetChatMembers(ctx context.Context, chatID string) ([
 	return members, nil
 }
 
-func (r *pgChatRepository) Update(ctx context.Context, chat *model.Chat) error {
+func (r *pgChatRepository) Update(ctx context.Context, chat *model.Chat, oldMediaIDs []string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var oldPaths []string
+	if len(oldMediaIDs) > 0 {
+		if strings.TrimSpace(oldMediaIDs[0]) != "" && strings.TrimSpace(oldMediaIDs[1]) != "" {
+			rows, err := tx.Query(ctx, `SELECT file_path FROM media WHERE id = ANY($1)`, oldMediaIDs)
+			if err != nil {
+				return fmt.Errorf("query old media paths: %w", err)
+			}
+			defer rows.Close()
+
+			for rows.Next() {
+				var path string
+				if err := rows.Scan(&path); err != nil {
+					return fmt.Errorf("scan path: %w", err)
+				}
+				oldPaths = append(oldPaths, path)
+			}
+			if len(oldPaths) > 0 {
+				if _, err = tx.Exec(ctx, `DELETE FROM media WHERE id = ANY($1)`, oldMediaIDs); err != nil {
+					return fmt.Errorf("delete old media records: %w", err)
+				}
+			}
+		}
+	}
 	query := `
         UPDATE chats
         SET name = $1,
+			group_photo_url = $2,
+			group_photo_original_url = $3,
             updated_at = now()
-        WHERE id = $2
+        WHERE id = $4
         RETURNING updated_at`
 
-	err := r.pool.QueryRow(ctx, query, chat.Name, chat.ID).Scan(&chat.UpdatedAt)
+	err = tx.QueryRow(ctx, query, chat.Name, chat.GroupPhotoURL, chat.GroupPhotoOriginalURL, chat.ID).Scan(&chat.UpdatedAt)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return fmt.Errorf("chat not found")
-		}
 		return fmt.Errorf("update chat: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	if len(oldPaths) > 0 {
+		for _, path := range oldPaths {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("failed to remove old media file: %w", err)
+			}
+		}
 	}
 
 	return nil

@@ -7,7 +7,8 @@ CREATE TABLE users (
     password_hash TEXT NOT NULL,
     display_name VARCHAR(100) NOT NULL,        
     about TEXT DEFAULT '',                    
-    profile_photo_url TEXT DEFAULT '',         
+    profile_photo_url TEXT DEFAULT '',   
+    profile_photo_original_url TEXT DEFAULT '',      
     public_key TEXT,                          
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -19,7 +20,9 @@ CREATE INDEX idx_users_email ON users (email);
 CREATE TABLE chats (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     type VARCHAR(10) NOT NULL CHECK (type IN ('private', 'group')),
-    name VARCHAR(100),                    
+    name VARCHAR(100),
+    group_photo_url TEXT DEFAULT '',     
+    group_photo_original_url TEXT DEFAULT '',               
     created_by UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()

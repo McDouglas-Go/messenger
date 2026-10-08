@@ -12,19 +12,19 @@ import (
 	"github.com/McDouglas-Go/messenger/internal/middleware"
 	"github.com/McDouglas-Go/messenger/internal/repository"
 	"github.com/McDouglas-Go/messenger/internal/service"
-	"github.com/McDouglas-Go/messenger/internal/ws"
 	"github.com/gorilla/mux"
 )
 
 type userResponse struct {
-	ID              string `json:"id"`
-	Username        string `json:"username"`
-	Email           string `json:"email"`
-	DisplayName     string `json:"display_name,omitempty"`
-	About           string `json:"about"`
-	ProfilePhotoURL string `json:"profile_photo_url,omitempty"`
-	CreatedAt       string `json:"created_at"`
-	UpdatedAt       string `json:"updated_at"`
+	ID                      string `json:"id"`
+	Username                string `json:"username"`
+	Email                   string `json:"email"`
+	DisplayName             string `json:"display_name,omitempty"`
+	About                   string `json:"about"`
+	ProfilePhotoURL         string `json:"profile_photo_url,omitempty"`
+	ProfileOriginalPhotoURL string `json:"profile_photo_original_url,omitempty"`
+	CreatedAt               string `json:"created_at"`
+	UpdatedAt               string `json:"updated_at"`
 }
 
 type SearchUserResponse struct {
@@ -38,42 +38,48 @@ type SearchUserResponse struct {
 }
 
 type updateProfileRequest struct {
-	DisplayName     *string `json:"display_name,omitempty"`
-	About           *string `json:"about,omitempty"`
-	ProfilePhotoURL *string `json:"profile_photo_url,omitempty"`
-	PublicKey       *string `json:"public_key,omitempty"`
-	RemoveAvatar    bool    `json:"remove_avatar,omitempty"`
+	DisplayName             *string `json:"display_name,omitempty"`
+	About                   *string `json:"about,omitempty"`
+	ProfilePhotoURL         *string `json:"profile_photo_url,omitempty"`
+	ProfileOriginalPhotoURL *string `json:"profile_photo_original_url,omitempty"`
+	PublicKey               *string `json:"public_key,omitempty"`
+	RemoveAvatar            bool    `json:"remove_avatar,omitempty"`
+}
+
+type UserPublicProfile struct {
+	ID                      string `json:"id"`
+	Username                string `json:"username"`
+	Email                   string `json:"email"`
+	DisplayName             string `json:"display_name,omitempty"`
+	About                   string `json:"about"`
+	ProfilePhotoURL         string `json:"profile_photo_url,omitempty"`
+	ProfilePhotoOriginalURL string `json:"profile_photo_original_url,omitempty"`
+	CreatedAt               string `json:"created_at"`
 }
 
 type AuthHandler struct {
 	authService  service.AuthSerice
 	userRepo     repository.UserRepository
-	chatRepo     repository.ChatRepository
 	baseURL      string
 	refreshTTL   time.Duration
 	cookieSecure bool
-	hub          *ws.Hub
 	log          *slog.Logger
 }
 
 func NewAuthHandler(
 	authService service.AuthSerice,
 	userRepo repository.UserRepository,
-	chatRepo repository.ChatRepository,
 	baseURL string,
 	refreshTTL time.Duration,
 	cookieSecure bool,
-	hub *ws.Hub,
 	logger *slog.Logger,
 ) *AuthHandler {
 	return &AuthHandler{
 		authService:  authService,
 		userRepo:     userRepo,
-		chatRepo:     chatRepo,
 		baseURL:      baseURL,
 		refreshTTL:   refreshTTL,
 		cookieSecure: cookieSecure,
-		hub:          hub,
 		log:          logger,
 	}
 }
@@ -112,14 +118,15 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := userResponse{
-		ID:              user.ID,
-		Username:        user.Username,
-		Email:           user.Email,
-		DisplayName:     user.DisplayName,
-		About:           user.About,
-		ProfilePhotoURL: user.ProfilePhotoURL,
-		CreatedAt:       user.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:       user.UpdatedAt.Format(time.RFC3339),
+		ID:                      user.ID,
+		Username:                user.Username,
+		Email:                   user.Email,
+		DisplayName:             user.DisplayName,
+		About:                   user.About,
+		ProfilePhotoURL:         user.ProfilePhotoURL,
+		ProfileOriginalPhotoURL: user.ProfilePhotoOriginalURL,
+		CreatedAt:               user.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:               user.UpdatedAt.Format(time.RFC3339),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -221,19 +228,22 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	profilePhoto := ""
-	if user.ProfilePhotoURL != "" {
+	originalProfilePhoto := ""
+	if user.ProfilePhotoURL != "" && user.ProfilePhotoOriginalURL != "" {
 		profilePhoto = h.baseURL + "/media/" + user.ProfilePhotoURL
+		originalProfilePhoto = h.baseURL + "/media/" + user.ProfilePhotoOriginalURL
 	}
 
 	resp := userResponse{
-		ID:              user.ID,
-		Username:        user.Username,
-		Email:           user.Email,
-		DisplayName:     user.DisplayName,
-		About:           user.About,
-		ProfilePhotoURL: profilePhoto,
-		CreatedAt:       user.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:       user.UpdatedAt.Format(time.RFC3339),
+		ID:                      user.ID,
+		Username:                user.Username,
+		Email:                   user.Email,
+		DisplayName:             user.DisplayName,
+		About:                   user.About,
+		ProfilePhotoURL:         profilePhoto,
+		ProfileOriginalPhotoURL: originalProfilePhoto,
+		CreatedAt:               user.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:               user.UpdatedAt.Format(time.RFC3339),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -260,6 +270,41 @@ func (h *AuthHandler) GetUserPublicKey(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := map[string]string{
 		"public_key": publicKey,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *AuthHandler) GetUserByID(w http.ResponseWriter, r *http.Request) {
+	userID := mux.Vars(r)["id"]
+	if userID == "" {
+		http.Error(w, "user_id is required", http.StatusBadRequest)
+		return
+	}
+
+	user, err := h.userRepo.GetByID(r.Context(), userID)
+	if err != nil || user == nil {
+		h.log.Error("GetUserByID failed", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	profilePhotoURL := ""
+	profilePhotoOriginalURL := ""
+	if user.ProfilePhotoURL != "" && user.ProfilePhotoOriginalURL != "" {
+		profilePhotoURL = h.baseURL + "/media/" + user.ProfilePhotoURL
+		profilePhotoOriginalURL = h.baseURL + "/media/" + user.ProfilePhotoOriginalURL
+	}
+
+	resp := UserPublicProfile{
+		ID:                      user.ID,
+		Username:                user.Username,
+		DisplayName:             user.DisplayName,
+		About:                   user.About,
+		ProfilePhotoURL:         profilePhotoURL,
+		ProfilePhotoOriginalURL: profilePhotoOriginalURL,
+		CreatedAt:               user.CreatedAt.Format(time.RFC3339),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -320,11 +365,12 @@ func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	input := service.UpdateProfileInput{
-		DisplayName:     req.DisplayName,
-		About:           req.About,
-		ProfilePhotoURL: req.ProfilePhotoURL,
-		PublicKey:       req.PublicKey,
-		RemoveAvatar:    req.RemoveAvatar,
+		DisplayName:             req.DisplayName,
+		About:                   req.About,
+		ProfilePhotoURL:         req.ProfilePhotoURL,
+		ProfileOriginalPhotoURL: req.ProfileOriginalPhotoURL,
+		PublicKey:               req.PublicKey,
+		RemoveAvatar:            req.RemoveAvatar,
 	}
 
 	user, err := h.authService.UpdateProfile(r.Context(), claims.UserID, input)
@@ -340,40 +386,6 @@ func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	profilePhoto := ""
 	if user.ProfilePhotoURL != "" {
 		profilePhoto = h.baseURL + "/media/" + user.ProfilePhotoURL
-	}
-
-	if req.ProfilePhotoURL != nil || req.RemoveAvatar {
-		newUrl := ""
-		if !req.RemoveAvatar && req.ProfilePhotoURL != nil {
-			newUrl = h.baseURL + "/media/" + *req.ProfilePhotoURL
-		}
-		chats, err := h.chatRepo.GetUserchats(r.Context(), claims.UserID)
-		if err != nil {
-			h.log.Error("failed to get user chats for avatar broadcast", "error", err)
-			return
-		}
-		recipients := make(map[string]bool)
-		for _, chat := range chats {
-			members, err := h.chatRepo.GetChatMembers(r.Context(), chat.ID)
-			if err != nil {
-				continue
-			}
-			for _, m := range members {
-				if m.UserID != claims.UserID {
-					recipients[m.UserID] = true
-				}
-			}
-		}
-		event := map[string]interface{}{
-			"event": "avatar_updated",
-			"data": map[string]string{
-				"user_id":           claims.UserID,
-				"profile_photo_url": newUrl,
-			},
-		}
-		for uid := range recipients {
-			h.hub.SendToUser(uid, event)
-		}
 	}
 
 	resp := userResponse{
